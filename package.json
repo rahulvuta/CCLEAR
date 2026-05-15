@@ -1,0 +1,54 @@
+{
+  "name": "adhd-browser",
+  "version": "1.0.0",
+  "private": true,
+  "author": "",
+  "description": "ADHD-focused Electron browser with local Ollama assistance",
+  "main": "out/main/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && electron-builder",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "build": {
+    "appId": "com.adhd.browser.mvp",
+    "productName": "ADHD Browser",
+    "files": ["out/**/*", "package.json"],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Network"
+    },
+    "win": {
+      "target": ["nsis"]
+    }
+  },
+  "dependencies": {
+    "electron-store": "^11.0.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0",
+    "@types/node": "^22.18.11",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron-builder": "^26.7.2",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.8.4",
+    "vite": "^5.4.11"
+  }
+}
