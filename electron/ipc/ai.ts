@@ -73,10 +73,18 @@ export function registerAiIpc() {
         role: 'system',
         content:
           [
-            'You are Focus, a concise assistant inside an ADHD-focused browser.',
-            'Use OPEN TABS CONTEXT to suggest where to navigate when asked.',
-            'Prefer short bullets. No fluff. If recommending a destination, cite the URL from the tabs list.',
-            'If unsure, suggest a search query.',
+            'You are Focus, a concise assistant inside CCLEAR.',
+            'You can control the browser by including special action tags in your response.',
+            'ACTION TAGS:',
+            '- [GOTO: url] -> Navigate the current tab to the URL.',
+            '- [NEW_TAB: url] -> Open a new tab with the URL.',
+            '- [BACK] -> Go back in history.',
+            '- [FORWARD] -> Go forward in history.',
+            '- [RELOAD] -> Reload the current page.',
+            '',
+            'RULES:',
+            '- If the user says "go to X", respond with "[GOTO: https://X.com] Sure, heading to X now."',
+            '- Prefer short bullets. No fluff.',
             '',
             'OPEN TABS CONTEXT:',
             context || '(no tabs)'
@@ -138,7 +146,7 @@ export function registerAiIpc() {
     }).join('\n\n')
 
     const system = [
-      'You radically compress text for ADHD readers. NOT a same-length paraphrase.',
+      'You radically compress text for clarity-focused readers. NOT a same-length paraphrase.',
       'Output ONLY a JSON array. No markdown.',
       'Each element: {"id":"...","summary":"...","keyPoints":["...","...","..."]}',
       'Hard rules:',
@@ -208,12 +216,13 @@ export function registerAiIpc() {
 
     const tabsStr = tabs.map(t => `[${t.id}] Title: ${t.title} | URL: ${t.url}`).join('\n')
     const system = [
-      'You categorize browser tabs.',
+      'You categorize browser tabs based on their specific content topic.',
       'Output ONLY a JSON array of objects with "id" and "group".',
-      'Example: [{"id":"abc", "group":"Research"}, {"id":"def", "group":"Video"}]',
-      'Groups should be broad like Research, Entertainment, Social, Work, Shopping, etc.'
+      'Example: [{"id":"1", "group":"Python Coding"}, {"id":"2", "group":"Electric Cars"}, {"id":"3", "group":"Python Coding"}]',
+      'CRITICAL: Categorize by SUBJECT MATTER (e.g., Cooking, Science, Tech, Finance, Gaming) NOT by purpose (e.g., skip "Work", "Research", "Shopping", "Entertainment").',
+      'Aim for clusters that reduce chaos. If a topic is very specific, use it. If a tab is unique, give it a topic or a slightly broader category.'
     ].join('\n')
-    const prompt = `Categorize these tabs:\n${tabsStr}`
+    const prompt = `Cluster these tabs by their subject matter topic (ignore tasks/purpose):\n${tabsStr}`
 
     try {
       const raw = await ollamaGenerate({
@@ -233,7 +242,7 @@ export function registerAiIpc() {
     if (!health.ok) return { inferredReason: 'AI unavailable', summary: 'Please install/start Ollama to get insights.' }
 
     const system = [
-      'You are a helpful assistant helping an ADHD user stay on track.',
+      'You are a helpful assistant helping a CCLEAR user stay on track.',
       'Output ONLY a JSON object with "inferredReason" (short phrase, max 10 words) and "summary" (extremely short, max 5-7 words).',
       'Do not include markdown or explanations.'
     ].join('\n')

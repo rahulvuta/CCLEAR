@@ -1,5 +1,5 @@
-export const DEFAULT_MODEL = process.env.ADHD_OLLAMA_MODEL ?? 'mistral:7b'
-export const DEFAULT_OLLAMA_HOST = process.env.ADHD_OLLAMA_HOST ?? 'http://127.0.0.1:11434'
+export const DEFAULT_MODEL = process.env.CCLEAR_OLLAMA_MODEL ?? 'mistral:7b'
+export const DEFAULT_OLLAMA_HOST = process.env.CCLEAR_OLLAMA_HOST ?? 'http://127.0.0.1:11434'
 
 export async function checkOllamaHealth(host = DEFAULT_OLLAMA_HOST): Promise<{ ok: boolean; error?: string }> {
   try {

@@ -6,7 +6,7 @@ const defaults: Prefs = {
 }
 
 const store = new Store<{ prefs: Prefs }>({
-  name: 'adhd-browser-preferences',
+  name: 'cclear-browser-preferences',
   defaults: {
     prefs: defaults
   }
