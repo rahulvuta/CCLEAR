@@ -19,6 +19,7 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
       if (!el.closest(contentShell)) return;
       if (el.closest(avoidSel)) return;
       if (isSearch && (el.tagName === 'A' || el.querySelector('a'))) return;
+      if (el.parentElement && el.parentElement.closest('[data-adhd-src-id]')) return;
       const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
       if (t.length < minLen) return;
       const id = 'adhd-b-' + idx++;
@@ -30,20 +31,26 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
         tagName: el.tagName.toLowerCase()
       });
     }
-    const candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption');
+    let candidates;
+    if (isSearch) {
+      candidates = document.querySelectorAll('p, span, div');
+    } else {
+      candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption');
+    }
     for (const el of Array.from(candidates)) {
       pushBlock(el, MIN);
     }
     if (blocks.length === 0) {
-      const min2 = Math.max(72, MIN - 35);
-      for (const el of Array.from(document.querySelectorAll('p, li, h1, h2, h3, blockquote'))) {
+      const min2 = Math.max(isSearch ? 40 : 72, MIN - (isSearch ? 50 : 35));
+      for (const el of Array.from(candidates)) {
         pushBlock(el, min2);
       }
     }
     if (blocks.length === 0 && document.body) {
-      var min3 = 52;
+      var min3 = isSearch ? 30 : 52;
       var seen = 0;
-      for (var el of Array.from(document.body.querySelectorAll('p'))) {
+      const c = isSearch ? document.body.querySelectorAll('p, span') : document.body.querySelectorAll('p');
+      for (var el of Array.from(c)) {
         pushBlock(el, min3);
         if (++seen > 40) break;
       }
