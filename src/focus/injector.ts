@@ -1,31 +1,24 @@
-export const READING_ASSIST_CLASS = 'adhd-reading-assist'
-export const FOCUS_MODE_CLASS = 'adhd-focus-visual'
+export const READING_ASSIST_CLASS = 'cclear-reading-assist'
+export const FOCUS_MODE_CLASS = 'cclear-focus-visual'
 
 /** Injects readability CSS + baseline class on <html>. Hides ads automatically. */
 export function getInjectReadingAssistScript(): string {
   const RA = READING_ASSIST_CLASS
   const css = `
-    /* ── Ad & distraction hiding ── */
-    [class*="ad-"], [class*="ad_"], [class*="ads-"], [class*="ads_"],
-    [class*="advert"], [class*="Advert"], [class*="Ad-container"],
-    [id*="ad-"], [id*="ad_"], [id*="ads-"], [id*="ads_"],
-    [id*="advert"], [id*="google_ads"], [id*="GoogleAd"],
-    [class*="sponsor"], [class*="Sponsor"],
-    [class*="promoted"], [class*="Promoted"],
+    /* ── Ad & distraction hiding (precise selectors only) ── */
     [data-ad], [data-ad-slot], [data-google-query-id],
+    ins.adsbygoogle, [class*="adsbygoogle"],
     iframe[src*="doubleclick"], iframe[src*="googlesyndication"],
     iframe[src*="amazon-adsystem"], iframe[src*="adservice"],
-    ins.adsbygoogle, [class*="adsbygoogle"],
-    [class*="dfp-"], [id*="dfp-"],
+    [class*="dfp-ad"], [id*="dfp-ad"],
     [class*="outbrain"], [class*="taboola"],
     [id*="outbrain"], [id*="taboola"],
     [class*="cookie-banner"], [class*="cookie-consent"],
     [class*="cookieBanner"], [class*="CookieConsent"],
-    [class*="cookie-notice"], [id*="cookie"],
-    [class*="gdpr"], [id*="gdpr"],
+    [class*="cookie-notice"],
+    [class*="gdpr-banner"], [id*="gdpr-banner"],
     [class*="consent-banner"], [class*="privacy-banner"],
     [class*="newsletter-popup"], [class*="newsletter-modal"],
-    [class*="popup-overlay"], [class*="modal-overlay"],
     [class*="subscribe-modal"], [class*="email-capture"],
     [class*="paywall"], [class*="Paywall"] {
       display: none !important;
@@ -37,22 +30,27 @@ export function getInjectReadingAssistScript(): string {
       pointer-events: none !important;
     }
 
-    /* ── Reading assist baseline ── */
-    html.${RA} main, html.${RA} article, html.${RA} [role="main"] {
+    /* Hide noscript content only inside main content, not globally */
+    html.${RA} noscript,
+    html.${RA} .msg--noscript {
+      display: none !important;
+    }
+
+    /* ── Reading assist baseline (article pages only, not search) ── */
+    html.${RA}.${FOCUS_MODE_CLASS}:not([data-cclear-is-search="true"]) article > *,
+    html.${RA}.${FOCUS_MODE_CLASS}:not([data-cclear-is-search="true"]) [role="article"] > * {
       max-width: 72ch;
-      margin-left: auto;
-      margin-right: auto;
     }
 
     /* ── Simplified text — stays inline, keeps site theme ── */
-    [data-adhd-simplified="true"] {
+    [data-cclear-simplified="true"] {
       border-left: 3px solid currentColor !important;
       padding-left: 10px !important;
       color: inherit !important;
       opacity: 0.95;
       position: relative;
     }
-    [data-adhd-simplified="true"]::before {
+    [data-cclear-simplified="true"]::before {
       content: 'Simplified';
       display: block;
       font-size: 0.7em;
@@ -63,7 +61,24 @@ export function getInjectReadingAssistScript(): string {
       font-weight: 600;
     }
 
-    .adhd-look-for {
+    /* ── Color contrast fallback ── */
+    [data-cclear-simplified] {
+      font-weight: 500;
+    }
+    @media (prefers-color-scheme: dark) {
+      [data-cclear-simplified="inline"], [data-cclear-simplified="true"] {
+        color: #f7f6f3 !important;
+        text-shadow: 0 0 2px rgba(0,0,0,0.6);
+      }
+    }
+    @media (prefers-color-scheme: light) {
+      [data-cclear-simplified="inline"], [data-cclear-simplified="true"] {
+        color: #323533 !important;
+        text-shadow: 0 0 2px rgba(255,255,255,0.8);
+      }
+    }
+
+    .cclear-look-for {
       margin: 10px 0 4px 0;
       padding: 0;
       font-size: 0.68em;
@@ -75,21 +90,21 @@ export function getInjectReadingAssistScript(): string {
     }
 
     /* ── Key points list — subtle, matches page theme ── */
-    .adhd-keypoints-inline {
+    .cclear-keypoints-inline {
       margin: 6px 0 2px 0;
       padding: 0 0 0 18px;
       font-size: 0.92em;
       opacity: 0.88;
     }
-    .adhd-keypoints-inline li {
+    .cclear-keypoints-inline li {
       margin: 3px 0;
     }
-    .adhd-keypoints-inline li::marker {
+    .cclear-keypoints-inline li::marker {
       content: '→ ';
     }
 
     /* ── Toggle button — subtle, blends with site ── */
-    .adhd-toggle-inline {
+    .cclear-toggle-inline {
       display: inline-block;
       margin-top: 4px;
       padding: 2px 8px;
@@ -102,12 +117,12 @@ export function getInjectReadingAssistScript(): string {
       opacity: 0.6;
       transition: opacity 0.2s;
     }
-    .adhd-toggle-inline:hover {
+    .cclear-toggle-inline:hover {
       opacity: 1;
     }
 
     /* ── Original text block (hidden by default) ── */
-    .adhd-original-inline {
+    .cclear-original-inline {
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px dashed currentColor;
@@ -117,7 +132,7 @@ export function getInjectReadingAssistScript(): string {
     }
 
     /* ── Highlighted key info ── */
-    mark.adhd-highlight {
+    mark.cclear-highlight {
       background: rgba(250, 204, 21, 0.5) !important;
       color: inherit !important;
       padding: 1px 3px;
@@ -126,17 +141,19 @@ export function getInjectReadingAssistScript(): string {
       box-decoration-break: clone;
     }
     @media (prefers-color-scheme: dark) {
-      mark.adhd-highlight {
+      mark.cclear-highlight {
         background: rgba(250, 204, 21, 0.25) !important;
       }
     }
   `.replace(/\s+/g, ' ')
   return `(() => {
-    const id = 'adhd-reading-style';
+    const id = 'cclear-reading-style';
     if (document.getElementById(id)) return;
     const style = document.createElement('style');
     style.id = id;
     style.textContent = ${JSON.stringify(css)};
+    const isSearch = /google\\.|duckduckgo\\.|bing\\.|yahoo\\.|brave\\.|kagi\\./i.test(location.hostname);
+    document.documentElement.setAttribute('data-cclear-is-search', isSearch ? 'true' : 'false');
     document.documentElement.classList.add(${JSON.stringify(RA)});
     document.head.appendChild(style);
   })();`

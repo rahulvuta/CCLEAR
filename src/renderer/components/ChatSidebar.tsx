@@ -17,7 +17,8 @@ export function ChatSidebar(props: Props) {
   return (
     <div className="chat">
       <div className="chatHead">
-        <div className="chatTitle">Focus assistant</div>
+        <div className="chatTitle">CCLEAR</div>
+        <div className="chatSubtitle">Focus assistant</div>
         <div className="chatSubtitle">
           Powered by local Ollama (<code>{'mistral:7b'}</code>). {aiHint ?? ''}
         </div>
