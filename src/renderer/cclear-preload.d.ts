@@ -13,7 +13,9 @@ export type CCLEARApi = {
     simplifyChunks(chunks: SimplifyChunk[]): Promise<{ id: string; summary: string; keyPoints: string[] }[]>
     groupTabs(tabs: TabContextItem[]): Promise<TabGroupAssignment[]>
     inferContext(url: string, title: string, historyUrls: string[]): Promise<TabContextSummary>
+    recommendLinks(historyUrls: string[]): Promise<{ name: string; url: string }[]>
   }
+  onShortcut: (callback: (action: string, ...args: unknown[]) => void) => () => void
 }
 
 declare global {
