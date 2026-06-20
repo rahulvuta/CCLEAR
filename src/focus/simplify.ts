@@ -12,6 +12,17 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
     const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','PRE','TEXTAREA','SVG']);
     const avoidSel = 'nav, footer, aside, header, [role="navigation"], [aria-hidden="true"]';
     const contentShell = 'main, article, section, [role="main"], [role="article"], body';
+    function getTextColor(node) {
+      if (node.nodeType === 3 && node.textContent.trim().length > 0) {
+        return window.getComputedStyle(node.parentElement).color;
+      }
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const c = getTextColor(node.childNodes[i]);
+        if (c) return c;
+      }
+      return node.nodeType === 1 ? window.getComputedStyle(node).color : null;
+    }
+
     let idx = 0;
     const blocks = [];
     function pushBlock(el, minLen) {
@@ -24,8 +35,13 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
       if (el.querySelector('noscript')) return;
       const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
       if (t.length < minLen) return;
+      
       const id = 'cclear-b-' + idx++;
       el.setAttribute('data-cclear-src-id', id);
+      
+      const tc = getTextColor(el);
+      if (tc) el.style.setProperty('--cclear-text-color', tc);
+
       blocks.push({
         id: id,
         text: t,
@@ -83,16 +99,22 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
   const json = JSON.stringify(payload)
   return `(() => {
     const payload = ${json};
+    let count = 0;
     for (const item of payload) {
       const el = document.querySelector('[data-cclear-src-id="' + item.id + '"]');
       if (!el) continue;
-      if (el.getAttribute('data-cclear-simplified')) continue;
+      if (el.getAttribute('data-cclear-simplified')) {
+        count++;
+        continue;
+      }
 
       const origHtml = el.innerHTML;
       el.setAttribute('data-cclear-original-html', origHtml);
       el.setAttribute('data-cclear-simplified', ${isSearch ? "'inline'" : "'true'"});
       el.innerHTML = item.__html;
+      count++;
     }
+    return count;
   })();`
 }
 
