@@ -20,9 +20,9 @@ const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
 const SIMPLIFY_MAX_BLOCKS = 100
 /** Immediate schedule after focus/nav */
-const FOCUS_SIMPLIFY_DEBOUNCE_MS = 80
+const FOCUS_SIMPLIFY_DEBOUNCE_MS = 800
 /** Re-scan when article text is still hydrating */
-const EXTRACT_RETRY_DELAYS_MS = [120, 400, 900] as const
+const EXTRACT_RETRY_DELAYS_MS = [300, 800, 1500] as const
 
 function normalizeUrl(raw: string): string {
   const t = raw.trim()
@@ -35,7 +35,7 @@ function normalizeUrl(raw: string): string {
   if (/^localhost(:\d+)?/i.test(t) || /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/i.test(t)) return `http://${t}`
   if (t.includes('.') && !t.includes(' ')) return `https://${t}`
   const q = encodeURIComponent(t)
-  return `https://duckduckgo.com/?q=${q}`
+  return `https://www.google.com/search?q=${q}`
 }
 
 async function waitForWebviewQuietImpl(w: WebviewTag): Promise<void> {
@@ -128,6 +128,7 @@ export function App() {
   const [chatInput, setChatInput] = useState('')
   const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([])
   const [chatSending, setChatSending] = useState(false)
+  const aiHealthyRef = useRef(false)
   const [aiHealthy, setAiHealthy] = useState<boolean | null>(null)
   const webviewRefs = useRef<Record<string, WebviewTag | null>>({})
   const tabsRef = useRef(tabs)
@@ -137,6 +138,7 @@ export function App() {
   const focusModeEnabledRef = useRef(focusModeEnabled)
   const activeIdRef = useRef(activeId)
   const focusSimplifyScheduleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastInferredRef = useRef<Map<string, string>>(new Map())
   const [sidebarOpen, setSidebarOpen] = useState(true)
   focusModeEnabledRef.current = focusModeEnabled
   activeIdRef.current = activeId
@@ -333,8 +335,6 @@ export function App() {
       let latestIntendedUrl: string | null = null
 
       const updUrlFromNav = (_e: any, url: string) => {
-        invalidateSimplifyLatestRef.current(id)
-        
         const effectiveUrl = url || 'about:blank'
         const currentReactUrl = tabsRef.current.find((t) => t.id === id)?.url
 
@@ -398,17 +398,20 @@ export function App() {
         }
         
         if (pageUrl && !pageUrl.startsWith('about:')) {
-          setContextLoading(p => ({ ...p, [tid]: true }))
-          const hist = historyMapRef.current[tid] || []
-          try {
-            const summary = await window.cclearBrowser.ai.inferContext(pageUrl, w.getTitle(), hist)
-            setTabContexts(p => {
-              const prevArr = p[tid] || []
-              return { ...p, [tid]: [...prevArr, summary].slice(-10) }
-            })
-          } catch {
-          } finally {
-            setContextLoading(p => ({ ...p, [tid]: false }))
+          if (lastInferredRef.current.get(tid) !== pageUrl) {
+            lastInferredRef.current.set(tid, pageUrl)
+            setContextLoading(p => ({ ...p, [tid]: true }))
+            const hist = historyMapRef.current[tid] || []
+            try {
+              const summary = await window.cclearBrowser.ai.inferContext(pageUrl, w.getTitle(), hist)
+              setTabContexts(p => {
+                const prevArr = p[tid] || []
+                return { ...p, [tid]: [...prevArr, summary].slice(-10) }
+              })
+            } catch {
+            } finally {
+              setContextLoading(p => ({ ...p, [tid]: false }))
+            }
           }
         }
 
@@ -526,21 +529,30 @@ export function App() {
     setChatMsgs(nextMsgs)
     if (!override) setChatInput('')
     try {
-      const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId)
+      // Grab screen text if a webview is active
+      let screenText = ''
+      const activeWv = webviewRefs.current[activeIdRef.current]
+      if (activeWv) {
+        try {
+          screenText = await activeWv.executeJavaScript('document.body.innerText.substring(0, 3000)', true)
+        } catch {}
+      }
+
+      const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId, screenText)
       
       // Execute AI actions
       if (assistant.includes('[GOTO:')) {
-        const m = assistant.match(/\[GOTO:\s*([^\]]+)\]/i)
+        const m = assistant.match(/\[GOTO:\s*([\s\S]*?)\]/i)
         if (m) {
-          const url = normalizeUrl(m[1])
+          const url = normalizeUrl(m[1].trim())
           const aid = activeIdRef.current
           setNavUrl(url)
           setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
         }
       }
       if (assistant.includes('[NEW_TAB')) {
-        const m = assistant.match(/\[NEW_TAB:?\s*([^\]]*)\]/i)
-        const url = (m && m[1].trim()) ? normalizeUrl(m[1]) : 'about:blank'
+        const m = assistant.match(/\[NEW_TAB:?\s*([\s\S]*?)\]/i)
+        const url = (m && m[1].trim()) ? normalizeUrl(m[1].trim()) : 'about:blank'
         const id = String(crypto.randomUUID())
         setTabs(t => [...t, { id, url, title: '' }])
         setActiveId(id)
@@ -549,16 +561,123 @@ export function App() {
       if (assistant.includes('[FORWARD]')) goForward()
       if (assistant.includes('[RELOAD]')) reload()
 
+      if (assistant.includes('[SEARCH:')) {
+        const m = assistant.match(/\[SEARCH:\s*([\s\S]*?)\]/i)
+        if (m) {
+          const q = m[1].trim()
+          const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`
+          const aid = activeIdRef.current
+          setNavUrl(url)
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+        }
+      }
+
+      if (assistant.includes('[PLAY_YOUTUBE:')) {
+        const m = assistant.match(/\[PLAY_YOUTUBE:\s*([\s\S]*?)\]/i)
+        if (m) {
+          const q = m[1].trim()
+          const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
+          const aid = activeIdRef.current
+          setNavUrl(url)
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+          
+          // Auto-click the first video after load
+          setTimeout(() => {
+            const w = webviewRefs.current[aid]
+            if (w) {
+              w.executeJavaScript(`
+                (() => {
+                  const check = setInterval(() => {
+                    const firstVid = document.querySelector('ytd-video-renderer a#video-title, ytd-compact-video-renderer a#video-title');
+                    if (firstVid) {
+                      clearInterval(check);
+                      firstVid.click();
+                    }
+                  }, 500);
+                  setTimeout(() => clearInterval(check), 5000);
+                })();
+              `, true).catch(() => {})
+            }
+          }, 1500)
+        }
+      }
+
+      if (assistant.includes('[CLICK:')) {
+        const m = assistant.match(/\[CLICK:\s*([\s\S]*?)\]/i)
+        if (m) {
+          const text = m[1].trim()
+          const w = webviewRefs.current[activeIdRef.current]
+          if (w) {
+            w.executeJavaScript(`
+              (() => {
+                const text = ${JSON.stringify(text)}.toLowerCase();
+                const els = Array.from(document.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]'));
+                const target = els.find(e => (e.innerText || e.value || '').toLowerCase().includes(text));
+                if (target) {
+                  target.click();
+                  return true;
+                }
+                return false;
+              })();
+            `, true).catch(() => {})
+          }
+        }
+      }
+
+      if (assistant.includes('[TYPE:')) {
+        const m = assistant.match(/\[TYPE:\s*([^,]+),\s*([\s\S]*?)\]/i)
+        if (m) {
+          const label = m[1].trim()
+          const text = m[2].trim()
+          const w = webviewRefs.current[activeIdRef.current]
+          if (w) {
+            w.executeJavaScript(`
+              (() => {
+                const l = ${JSON.stringify(label)}.toLowerCase();
+                const inputs = Array.from(document.querySelectorAll('input, textarea'));
+                const target = inputs.find(i => {
+                  return (i.placeholder || '').toLowerCase().includes(l) ||
+                         (i.name || '').toLowerCase().includes(l) ||
+                         (i.id || '').toLowerCase().includes(l) ||
+                         (i.getAttribute('aria-label') || '').toLowerCase().includes(l);
+                });
+                if (target) {
+                  target.value = ${JSON.stringify(text)};
+                  target.dispatchEvent(new Event('input', { bubbles: true }));
+                  target.dispatchEvent(new Event('change', { bubbles: true }));
+                  if (target.form) {
+                    const sb = target.form.querySelector('input[type="submit"], button[type="submit"]');
+                    if (sb) sb.click();
+                    else target.form.submit();
+                  } else {
+                    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                  }
+                  return true;
+                }
+                return false;
+              })();
+            `, true).catch(() => {})
+          }
+        }
+      }
+
       // Clean display message
       const displayMsg = assistant
-        .replace(/\[GOTO:[^\]]+\]/gi, '')
-        .replace(/\[NEW_TAB:?[^\]]*\]/gi, '')
+        .replace(/\[GOTO:[\s\S]*?\]/gi, '')
+        .replace(/\[NEW_TAB:?[\s\S]*?\]/gi, '')
         .replace(/\[BACK\]/gi, '')
         .replace(/\[FORWARD\]/gi, '')
         .replace(/\[RELOAD\]/gi, '')
+        .replace(/\[SEARCH:[\s\S]*?\]/gi, '')
+        .replace(/\[PLAY_YOUTUBE:[\s\S]*?\]/gi, '')
+        .replace(/\[CLICK:[\s\S]*?\]/gi, '')
+        .replace(/\[TYPE:[\s\S]*?\]/gi, '')
         .trim()
 
-      setChatMsgs([...nextMsgs, { role: 'assistant', content: displayMsg || assistant }])
+      const hasTags = assistant.includes('[') && assistant.includes(']')
+      const finalMsg = displayMsg ? displayMsg : (hasTags ? "Action completed." : assistant)
+
+      setChatMsgs([...nextMsgs, { role: 'assistant', content: finalMsg }])
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setChatMsgs([...nextMsgs, { role: 'assistant', content: `Assistant error:\n${msg}` }])
@@ -586,7 +705,7 @@ export function App() {
       } catch {
         // ignore
       }
-    }, 3000)
+    }, 8000)
     return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabUrlsKey, tabs.length])
