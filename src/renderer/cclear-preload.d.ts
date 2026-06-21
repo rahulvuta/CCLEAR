@@ -9,7 +9,7 @@ export type CCLEARApi = {
   }
   ai: {
     health(): Promise<AiHealth>
-    chat(messages: ChatMessage[], tabs: TabContextItem[], activeTabId?: string): Promise<string>
+    chat(messages: ChatMessage[], tabs: TabContextItem[], activeTabId?: string, screenText?: string): Promise<string>
     simplifyChunks(chunks: SimplifyChunk[]): Promise<{ id: string; summary: string; keyPoints: string[] }[]>
     groupTabs(tabs: TabContextItem[]): Promise<TabGroupAssignment[]>
     inferContext(url: string, title: string, historyUrls: string[]): Promise<TabContextSummary>
