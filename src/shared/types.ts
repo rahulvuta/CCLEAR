@@ -23,6 +23,17 @@ export type PageBlockForSimplify = {
   tagName: string
 }
 
+export type TabGroupAssignment = {
+  id: string
+  group: string
+}
+
+export type TabContextSummary = {
+  originUrl?: string
+  inferredReason: string
+  summary: string
+}
+
 export type Prefs = {
   focusModeEnabled: boolean
 }
