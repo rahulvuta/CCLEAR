@@ -129,7 +129,8 @@ export function registerAiIpc() {
     // Build a SINGLE prompt with all chunks numbered
     // Truncate each chunk to keep total prompt small and fast
     const MAX_CHARS_PER_CHUNK = 180
-    const numberedChunks = uncached.map((c, i) => {
+    const aiChunks = uncached.slice(0, 4)
+    const numberedChunks = aiChunks.map((c, i) => {
       const truncated = c.text.length > MAX_CHARS_PER_CHUNK
         ? c.text.slice(0, MAX_CHARS_PER_CHUNK) + '...'
         : c.text
@@ -147,7 +148,7 @@ export function registerAiIpc() {
       'Return valid JSON only.'
     ].join('\n')
 
-    const prompt = `Simplify these ${uncached.length} text blocks:\n\n${numberedChunks}`
+    const prompt = `Simplify these ${aiChunks.length} text blocks:\n\n${numberedChunks}`
 
     try {
       const raw = await ollamaGenerate({
@@ -198,5 +199,60 @@ export function registerAiIpc() {
       (c) =>
         results.get(c.id) ?? heuristicSimplifyChunks([c])[0] ?? { id: c.id, summary: '', keyPoints: [] }
     )
+  })
+
+  ipcMain.handle('ai:group-tabs', async (_evt, tabs: TabContextItem[]) => {
+    if (tabs.length < 2) return []
+    const health = await checkOllamaHealth()
+    if (!health.ok) return []
+
+    const tabsStr = tabs.map(t => `[${t.id}] Title: ${t.title} | URL: ${t.url}`).join('\n')
+    const system = [
+      'You categorize browser tabs.',
+      'Output ONLY a JSON array of objects with "id" and "group".',
+      'Example: [{"id":"abc", "group":"Research"}, {"id":"def", "group":"Video"}]',
+      'Groups should be broad like Research, Entertainment, Social, Work, Shopping, etc.'
+    ].join('\n')
+    const prompt = `Categorize these tabs:\n${tabsStr}`
+
+    try {
+      const raw = await ollamaGenerate({
+        system, prompt, temperature: 0.1, numPredict: 150, timeoutMs: 5000
+      })
+      const t = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+      const parsed = JSON.parse(t)
+      if (Array.isArray(parsed)) return parsed
+      return []
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('ai:infer-context', async (_evt, payload: { url: string, title: string, historyUrls: string[] }) => {
+    const health = await checkOllamaHealth()
+    if (!health.ok) return { inferredReason: 'AI unavailable', summary: 'Please install/start Ollama to get insights.' }
+
+    const system = [
+      'You are a helpful assistant helping an ADHD user stay on track.',
+      'Output ONLY a JSON object with "inferredReason" (short phrase, max 10 words) and "summary" (extremely short, max 5-7 words).',
+      'Do not include markdown or explanations.'
+    ].join('\n')
+    const histStr = payload.historyUrls.length > 0 ? payload.historyUrls.join(', ') : 'None'
+    const prompt = `Current Page: ${payload.title} (${payload.url})\nRecent History: ${histStr}\n\nInfer why the user opened this and what it is.`
+
+    try {
+      const raw = await ollamaGenerate({
+        system, prompt, temperature: 0.2, numPredict: 100, timeoutMs: 4000
+      })
+      const t = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+      const parsed = JSON.parse(t)
+      return {
+        originUrl: payload.historyUrls[payload.historyUrls.length - 1],
+        inferredReason: parsed.inferredReason || 'Browsing',
+        summary: parsed.summary || 'A web page.'
+      }
+    } catch {
+      return { inferredReason: 'Loading...', summary: 'Unable to analyze.' }
+    }
   })
 }
