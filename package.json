@@ -1,9 +1,9 @@
 {
-  "name": "adhd-browser",
+  "name": "cclear-browser",
   "version": "1.0.0",
   "private": true,
   "author": "",
-  "description": "ADHD-focused Electron browser with local Ollama assistance",
+  "description": "CCLEAR Browser with local Ollama assistance",
   "main": "out/main/main.js",
   "type": "module",
   "scripts": {
@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "build": {
-    "appId": "com.adhd.browser.mvp",
-    "productName": "ADHD Browser",
+    "appId": "com.cclear.browser.mvp",
+    "productName": "CCLEAR Browser",
     "files": ["out/**/*", "package.json"],
     "directories": {
       "output": "release"
