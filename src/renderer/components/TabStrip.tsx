@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
 
-export type UITab = { id: string; title: string; url: string }
+export type UITab = { id: string; title: string; url: string; group?: string }
 
 type Props = {
   tabs: UITab[]
@@ -11,25 +11,53 @@ type Props = {
 }
 
 export function TabStrip({ tabs, activeId, setActiveId, onClose, onNewTab }: Props) {
+  // Group tabs for rendering
+  const groupedTabs: { group: string; tabs: UITab[] }[] = []
+  let currentGroup = ''
+  let currentGroupTabs: UITab[] = []
+
+  tabs.forEach((t) => {
+    const g = t.group || ''
+    if (g !== currentGroup) {
+      if (currentGroupTabs.length > 0) {
+        groupedTabs.push({ group: currentGroup, tabs: currentGroupTabs })
+      }
+      currentGroup = g
+      currentGroupTabs = [t]
+    } else {
+      currentGroupTabs.push(t)
+    }
+  })
+  if (currentGroupTabs.length > 0) {
+    groupedTabs.push({ group: currentGroup, tabs: currentGroupTabs })
+  }
+
   return (
     <div className="tabStrip">
-      {tabs.map((tab) => (
-        <div key={tab.id} className="tab" role="tab" data-active={tab.id === activeId ? 'true' : 'false'}>
-          <button type="button" className="tabTitle" title={tab.url} onClick={() => setActiveId(tab.id)}>
-            {tab.title || tab.url || 'New tab'}
-          </button>
-          <button
-            type="button"
-            className="tabClose"
-            aria-label={`Close tab`}
-            title="Close"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose(tab.id)
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
+      {groupedTabs.map((g, idx) => (
+        <div key={`g-${idx}`} className="tabGroupContainer">
+          {g.group && <div className="tabGroupLabel">{g.group}</div>}
+          <div className={`tabGroup ${g.group ? 'hasGroup' : ''}`}>
+            {g.tabs.map((tab) => (
+              <div key={tab.id} className="tab" role="tab" data-active={tab.id === activeId ? 'true' : 'false'}>
+                <button type="button" className="tabTitle" title={tab.url} onClick={() => setActiveId(tab.id)}>
+                  {tab.title || tab.url || 'New tab'}
+                </button>
+                <button
+                  type="button"
+                  className="tabClose"
+                  aria-label={`Close tab`}
+                  title="Close"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onClose(tab.id)
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       ))}
       <button type="button" className="tabNewBtn" title="New tab" onClick={onNewTab}>
