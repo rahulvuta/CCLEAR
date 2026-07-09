@@ -4,7 +4,6 @@ export const FOCUS_MODE_CLASS = 'adhd-focus-visual'
 /** Injects readability CSS + baseline class on <html>. Hides ads automatically. */
 export function getInjectReadingAssistScript(): string {
   const RA = READING_ASSIST_CLASS
-  const FM = FOCUS_MODE_CLASS
   const css = `
     /* ── Ad & distraction hiding ── */
     [class*="ad-"], [class*="ad_"], [class*="ads-"], [class*="ads_"],
@@ -45,13 +44,6 @@ export function getInjectReadingAssistScript(): string {
       margin-right: auto;
     }
 
-    /* ── Focus mode visual bumps ── */
-    html.${FM} {
-      font-size: 18px !important;
-      line-height: 1.7 !important;
-      letter-spacing: 0.01em !important;
-    }
-
     /* ── Simplified text — stays inline, keeps site theme ── */
     [data-adhd-simplified="true"] {
       border-left: 3px solid currentColor !important;
@@ -68,10 +60,6 @@ export function getInjectReadingAssistScript(): string {
       opacity: 0.5;
       margin-bottom: 4px;
       font-weight: 600;
-    }
-
-    .adhd-summary-text {
-      font-size: 1.02em;
     }
 
     .adhd-look-for {

@@ -30,7 +30,7 @@ async function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 620,
-    title: 'ADHD Browser',
+    title: 'CCLEAR Browser',
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
