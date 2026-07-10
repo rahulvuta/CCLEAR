@@ -2,8 +2,9 @@ import type { PageBlockForSimplify, SimplifyChunk } from '../shared/types'
 import { buildReplacementInnerHtml } from './simplifyApplyHtml'
 
 /** minChars ↑ = fewer/smaller prompts; slices cap how many chunks go to the model at once */
-export function getExtractChunksScript(minChars = 140): string {
+export function getExtractChunksScript(minChars = 140, isSearch = false): string {
   return `(() => {
+    const isSearch = ${isSearch};
     for (const n of Array.from(document.querySelectorAll('[data-adhd-src-id]'))) {
       n.removeAttribute('data-adhd-src-id');
     }
@@ -17,6 +18,7 @@ export function getExtractChunksScript(minChars = 140): string {
       if (SKIP.has(el.tagName)) return;
       if (!el.closest(contentShell)) return;
       if (el.closest(avoidSel)) return;
+      if (isSearch && (el.tagName === 'A' || el.querySelector('a'))) return;
       const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
       if (t.length < minLen) return;
       const id = 'adhd-b-' + idx++;
@@ -64,10 +66,10 @@ export type ApplySummaryItem = {
   tagName?: string
 }
 
-export function buildApplySummariesScript(items: ApplySummaryItem[]): string {
+export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = false): string {
   const payload = items.map((item) => ({
     id: item.id,
-    __html: buildReplacementInnerHtml(item, ''),
+    __html: buildReplacementInnerHtml(item, '', isSearch),
   }))
   const json = JSON.stringify(payload)
   return `(() => {
@@ -75,11 +77,11 @@ export function buildApplySummariesScript(items: ApplySummaryItem[]): string {
     for (const item of payload) {
       const el = document.querySelector('[data-adhd-src-id="' + item.id + '"]');
       if (!el) continue;
-      if (el.getAttribute('data-adhd-simplified') === 'true') continue;
+      if (el.getAttribute('data-adhd-simplified')) continue;
 
       const origHtml = el.innerHTML;
       el.setAttribute('data-adhd-original-html', origHtml);
-      el.setAttribute('data-adhd-simplified', 'true');
+      el.setAttribute('data-adhd-simplified', isSearch ? 'inline' : 'true');
       el.innerHTML = item.__html;
     }
   })();`
@@ -87,7 +89,7 @@ export function buildApplySummariesScript(items: ApplySummaryItem[]): string {
 
 export function buildRestoreSummariesScript(): string {
   return `(() => {
-    const els = Array.from(document.querySelectorAll('[data-adhd-simplified="true"]'));
+    const els = Array.from(document.querySelectorAll('[data-adhd-simplified]'));
     for (const el of els) {
       const origHtml = el.getAttribute('data-adhd-original-html');
       if (origHtml != null) {

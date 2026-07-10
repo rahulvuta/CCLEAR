@@ -48,6 +48,7 @@ export function getInjectReadingAssistScript(): string {
     [data-adhd-simplified="true"] {
       border-left: 3px solid currentColor !important;
       padding-left: 10px !important;
+      color: inherit !important;
       opacity: 0.95;
       position: relative;
     }
