@@ -30,100 +30,70 @@ export function getInjectReadingAssistScript(): string {
       pointer-events: none !important;
     }
 
-    /* Hide noscript content only inside main content, not globally */
     html.${RA} noscript,
     html.${RA} .msg--noscript {
       display: none !important;
     }
 
-    /* ── Reading assist baseline ── */
-    /* Removed aggressive max-width that was breaking layouts on complex sites */
-
-    /* ── Simplified text — stays inline, keeps site theme ── */
-    [data-cclear-simplified="true"] {
-      border-left: 3px solid currentColor !important;
-      padding-left: 10px !important;
+    [data-cclear-simplified="true"],
+    [data-cclear-simplified="inline"] {
       color: var(--cclear-text-color, inherit) !important;
-      opacity: 0.95;
-      position: relative;
-    }
-    [data-cclear-simplified="true"]::before {
-      content: 'Simplified';
-      display: block;
-      font-size: 0.7em;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      opacity: 0.5;
-      margin-bottom: 4px;
-      font-weight: 600;
     }
 
-    /* ── Color contrast fallback ── */
-    [data-cclear-simplified] {
-      font-weight: 500;
+    .cclear-summary-text {
+      font-size: inherit;
+      line-height: inherit;
     }
 
-    .cclear-look-for {
-      margin: 10px 0 4px 0;
-      padding: 0;
-      font-size: 0.68em;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      opacity: 0.75;
-      color: inherit;
+    mark.cclear-phrase {
+      background-color: rgba(250, 204, 21, 0.28) !important;
+      color: inherit !important;
+      padding: 0 1px !important;
+      border-radius: 2px !important;
+      box-decoration-break: clone !important;
+      -webkit-box-decoration-break: clone !important;
+      font-weight: inherit !important;
+    }
+    strong.cclear-term {
+      font-weight: 700 !important;
+      color: inherit !important;
+      background: none !important;
+    }
+    mark.cclear-highlight {
+      background-color: rgba(250, 204, 21, 0.28) !important;
+      color: inherit !important;
+      padding: 0 1px !important;
+      border-radius: 2px !important;
+      box-decoration-break: clone !important;
+      -webkit-box-decoration-break: clone !important;
     }
 
-    /* ── Key points list — subtle, matches page theme ── */
-    .cclear-keypoints-inline {
-      margin: 6px 0 2px 0;
-      padding: 0 0 0 18px;
-      font-size: 0.92em;
-      opacity: 0.88;
-    }
-    .cclear-keypoints-inline li {
-      margin: 3px 0;
-    }
-    .cclear-keypoints-inline li::marker {
-      content: '→ ';
-    }
-
-    /* ── Toggle button — subtle, blends with site ── */
     .cclear-toggle-inline {
-      display: inline-block;
-      margin-top: 4px;
-      padding: 2px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-      border: 1px solid currentColor;
+      display: inline;
+      margin-left: 6px;
+      padding: 0;
+      border: none;
       background: transparent;
       color: inherit;
       font-size: 0.75em;
-      opacity: 0.6;
-      transition: opacity 0.2s;
+      opacity: 0.5;
+      cursor: pointer;
+      text-decoration: underline;
+      vertical-align: baseline;
     }
     .cclear-toggle-inline:hover {
-      opacity: 1;
+      opacity: 0.85;
     }
 
-    /* ── Original text block (hidden by default) ── */
     .cclear-original-inline {
+      display: block;
       margin-top: 8px;
       padding-top: 8px;
-      border-top: 1px dashed currentColor;
+      border-top: 1px dashed color-mix(in srgb, currentColor 30%, transparent);
       opacity: 0.6;
       font-size: 0.92em;
+      line-height: 1.5;
       white-space: pre-wrap;
-    }
-
-    /* ── Highlighted key info ── */
-    mark.cclear-highlight {
-      background: rgba(250, 204, 21, 0.35) !important;
-      color: inherit !important;
-      padding: 1px 3px;
-      border-radius: 3px;
-      font-weight: 600;
-      box-decoration-break: clone;
     }
   `.replace(/\s+/g, ' ')
   return `(() => {
