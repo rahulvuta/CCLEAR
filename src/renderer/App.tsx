@@ -5,8 +5,9 @@ import { ChatSidebar } from './components/ChatSidebar'
 import { TabStrip, type UITab } from './components/TabStrip'
 import { TopBar } from './components/TopBar'
 import { WebviewHost } from './components/WebviewHost'
-import type { ChatMessage, PageBlockForSimplify, TabContextItem } from '../shared/types'
+import type { ChatMessage, PageBlockForSimplify, TabContextItem, TabContextSummary } from '../shared/types'
 import type { ApplySummaryItem } from '../focus/simplify'
+import { WhyAmIHereBox } from './components/WhyAmIHereBox'
 import {
   buildApplySummariesScript,
   buildRestoreSummariesScript,
@@ -17,7 +18,7 @@ import { getInjectReadingAssistScript, getSetFocusVisualScript } from '../focus/
 
 const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
-const SIMPLIFY_MAX_BLOCKS = 3
+const SIMPLIFY_MAX_BLOCKS = 100
 /** Immediate schedule after focus/nav */
 const FOCUS_SIMPLIFY_DEBOUNCE_MS = 80
 /** Re-scan when article text is still hydrating */
@@ -97,6 +98,12 @@ export function App() {
   const [activeId, setActiveId] = useState(firstId)
   const [navUrl, setNavUrl] = useState('about:blank')
   const [focusModeEnabled, setFocusModeEnabled] = useState(false)
+  const [simplifyBusy, setSimplifyBusy] = useState(false)
+  
+  const [tabContexts, setTabContexts] = useState<Record<string, TabContextSummary[]>>({})
+  const [contextLoading, setContextLoading] = useState<Record<string, boolean>>({})
+  const historyMapRef = useRef<Record<string, string[]>>({})
+
   /** Last simplified payloads per `${tabId}|url` for instant re-apply */
   const simplifyApplyCacheRef = useRef<Map<string, ApplySummaryItem[]>>(new Map())
   /** Serial queue so no request is dropped while another tab or navigation is in flight */
@@ -145,10 +152,11 @@ export function App() {
     [tabs, activeId]
   )
 
-  const injectAssist = useCallback(async (w: WebviewTag, focusVisual: boolean) => {
+  const injectAssist = useCallback(async (w: WebviewTag) => {
     try {
       await w.executeJavaScript(getInjectReadingAssistScript(), true)
-      await w.executeJavaScript(getSetFocusVisualScript(focusVisual), true)
+      /* Keep baseline zoom: never enlarge site text when Focus / simplify runs */
+      await w.executeJavaScript(getSetFocusVisualScript(false), true)
     } catch {
       //
     }
@@ -205,8 +213,9 @@ export function App() {
     const origById = new Map(list.map((b) => [b.id, b.text]))
     const tagById = new Map(list.map((b) => [b.id, b.tagName]))
 
+    setSimplifyBusy(true)
     try {
-      const res = await window.adhdBrowser.ai.simplifyChunks(chunks)
+      const res = await window.cclearBrowser.ai.simplifyChunks(chunks)
       const out = res.map((r) => ({
         ...r,
         original: origById.get(r.id),
@@ -218,6 +227,8 @@ export function App() {
       simplifyApplyCacheRef.current.set(cacheKey, out)
     } catch (e) {
       console.warn('[adhd] focus simplify:', e instanceof Error ? e.message : e)
+    } finally {
+      setSimplifyBusy(false)
     }
   }, [])
 
@@ -244,13 +255,13 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false
-    void window.adhdBrowser.prefs
+    void window.cclearBrowser.prefs
       .get()
       .then((p) => {
         if (!cancelled) setFocusModeEnabled(p.focusModeEnabled)
       })
       .catch(() => {})
-    void window.adhdBrowser.ai
+    void window.cclearBrowser.ai
       .health()
       .then((h) => {
         if (!cancelled) setAiHealthy(h.ok)
@@ -270,7 +281,7 @@ export function App() {
 
   const persistFocusMode = useCallback(async (next: boolean) => {
     setFocusModeEnabled(next)
-    await window.adhdBrowser.prefs.set({ focusModeEnabled: next })
+    await window.cclearBrowser.prefs.set({ focusModeEnabled: next })
     if (!next) {
       await restoreSimplifiedAcrossAllTabs()
     }
@@ -306,6 +317,12 @@ export function App() {
           prev.map((t) => (t.id === id ? { ...t, url: url || t.url } : t))
         )
         if (activeIdRef.current === id) setNavUrl(url || '')
+
+        if (url && !url.startsWith('about:')) {
+          if (!historyMapRef.current[id]) historyMapRef.current[id] = []
+          const arr = historyMapRef.current[id]
+          if (arr[arr.length - 1] !== url) arr.push(url)
+        }
       }
 
       const onTitle = (_e: any, title: string) => {
@@ -315,11 +332,26 @@ export function App() {
       }
 
       const onLoad = async () => {
-        await injectAssist(w, focusModeEnabledRef.current)
+        await injectAssist(w)
         const tid = id
+        
+        const pageUrl = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
+        if (pageUrl && !pageUrl.startsWith('about:')) {
+          setContextLoading(p => ({ ...p, [tid]: true }))
+          const hist = historyMapRef.current[tid] || []
+          try {
+            const summary = await window.cclearBrowser.ai.inferContext(pageUrl, w.getTitle(), hist)
+            setTabContexts(p => {
+              const prevArr = p[tid] || []
+              return { ...p, [tid]: [...prevArr, summary].slice(-10) }
+            })
+          } catch {
+          } finally {
+            setContextLoading(p => ({ ...p, [tid]: false }))
+          }
+        }
+
         if (!focusModeEnabledRef.current || activeIdRef.current !== tid) return
-        const pageUrl =
-          tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
         runFocusAutoSimplifyRef.current(tid, pageUrl)
       }
 
@@ -334,7 +366,7 @@ export function App() {
   useEffect(() => {
     const w = webviewRefs.current[activeId]
     if (!w) return
-    void injectAssist(w, focusModeEnabled).catch(() => {})
+    void injectAssist(w).catch(() => {})
   }, [focusModeEnabled, activeId, injectAssist])
 
   const setWebviewRef = useCallback(
@@ -410,7 +442,7 @@ export function App() {
     setChatMsgs(nextMsgs)
     if (!override) setChatInput('')
     try {
-      const assistant = await window.adhdBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId)
+      const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId)
       setChatMsgs([...nextMsgs, { role: 'assistant', content: assistant }])
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -419,6 +451,24 @@ export function App() {
       setChatSending(false)
     }
   }
+
+  useEffect(() => {
+    if (tabs.length < 2) return
+    const timer = setTimeout(async () => {
+      try {
+        const groups = await window.cclearBrowser.ai.groupTabs(tabContextItems)
+        if (groups && groups.length > 0) {
+          setTabs(prev => prev.map(t => {
+            const g = groups.find(x => x.id === t.id)
+            return g ? { ...t, group: g.group } : t
+          }))
+        }
+      } catch (e) {
+        // ignore
+      }
+    }, 2500)
+    return () => clearTimeout(timer)
+  }, [tabs.map(t => t.url).join(','), tabs.length, tabContextItems])
 
   return (
     <div className="appShell">
@@ -435,6 +485,7 @@ export function App() {
           setFocusModeEnabled={(v) => {
             void persistFocusMode(typeof v === 'function' ? v(focusModeEnabled) : v)
           }}
+          simplifyBusy={simplifyBusy}
         />
         <WebviewHost tabs={tabs} activeId={activeId} setWebviewRef={(id, el) => setWebviewRef(id, el)} />
       </div>
@@ -463,6 +514,7 @@ export function App() {
             )}
           </button>
           <div className="chatPanel" id="adhd-chat-panel" aria-hidden={!sidebarOpen}>
+            <WhyAmIHereBox summaries={tabContexts[activeId] || []} isLoading={contextLoading[activeId] || false} />
             <ChatSidebar
               aiHealthy={aiHealthy}
               aiHint="Runs fully local on your Mac when Ollama is installed."
