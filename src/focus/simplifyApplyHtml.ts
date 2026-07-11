@@ -44,11 +44,15 @@ type SummaryInline = {
 /**
  * Final innerHTML injected into marked elements (trusted: our own strings).
  */
-export function buildReplacementInnerHtml(item: SummaryInline, strippedOriginalFallback: string): string {
+export function buildReplacementInnerHtml(item: SummaryInline, strippedOriginalFallback: string, isSearch: boolean = false): string {
   const summary = item.summary ?? ''
   const kp = item.keyPoints?.filter(Boolean).map(String) ?? []
 
-  let html = '<span class="adhd-summary-text">' + highlightedSummary(summary, kp) + '</span>'
+  let html = '<span class="adhd-summary-text" style="color: inherit;">' + highlightedSummary(summary, kp) + '</span>'
+
+  if (isSearch) {
+    return html
+  }
 
   const list = kp.slice(0, 3)
   if (list.length) {

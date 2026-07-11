@@ -171,21 +171,28 @@ export function App() {
 
     await waitForWebviewQuiet(w)
 
+    let isSearch = false
+    try {
+      const host = new URL(trimmed).hostname
+      isSearch = /google\.|duckduckgo\.|bing\.|yahoo\.|brave\.|kagi\./i.test(host)
+    } catch {
+      isSearch = false
+    }
     const cacheKey = simplifyCacheKey(tabId, trimmed)
     const already = (await w.executeJavaScript(
-      `document.querySelector('[data-adhd-simplified="true"]') != null`,
+      `document.querySelector('[data-adhd-simplified]') != null`,
       true
     )) as boolean
     if (already) return
 
     const cached = simplifyApplyCacheRef.current.get(cacheKey)
     if (cached && cached.length > 0) {
-      await w.executeJavaScript(buildApplySummariesScript(cached), true)
+      await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)
       return
     }
 
     const tryExtract = async () =>
-      (await w.executeJavaScript(getExtractChunksScript(EXTRACT_MIN_CHARS), true)) as PageBlockForSimplify[]
+      (await w.executeJavaScript(getExtractChunksScript(EXTRACT_MIN_CHARS, isSearch), true)) as PageBlockForSimplify[]
 
     let blocks = await tryExtract()
     if (!blocks.length) {
@@ -223,7 +230,7 @@ export function App() {
         keyPoints: r.keyPoints ?? [],
         tagName: tagById.get(r.id)
       }))
-      await w.executeJavaScript(buildApplySummariesScript(out), true)
+      await w.executeJavaScript(buildApplySummariesScript(out, isSearch), true)
       simplifyApplyCacheRef.current.set(cacheKey, out)
     } catch (e) {
       console.warn('[adhd] focus simplify:', e instanceof Error ? e.message : e)
