@@ -1,9 +1,9 @@
 {
-  "name": "cclear-browser",
+  "name": "cclear",
   "version": "1.0.0",
   "private": true,
   "author": "",
-  "description": "CCLEAR Browser with local Ollama assistance",
+  "description": "CCLEAR — clarity-focused browser with local Ollama assistance",
   "main": "out/main/main.js",
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
   },
   "build": {
     "appId": "com.cclear.browser.mvp",
-    "productName": "CCLEAR Browser",
+    "productName": "CCLEAR",
     "files": ["out/**/*", "package.json"],
     "directories": {
       "output": "release"
