@@ -30,7 +30,7 @@ async function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 620,
-    title: 'CCLEAR Browser',
+    title: 'CCLEAR',
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
@@ -49,6 +49,30 @@ async function createWindow() {
   } else {
     await win.loadFile(urlOrFile)
   }
+
+  // Ensure webviews render with standard desktop user agent
+  const ses = win.webContents.session
+  ses.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+
+  // Allow webviews to open new windows (popups) normally
+  ses.setPermissionRequestHandler((_webContents, permission, callback) => {
+    const allowed = ['media', 'geolocation', 'notifications', 'fullscreen', 'pointerLock']
+    callback(allowed.includes(permission))
+  })
+
+  // Suppress noisy console errors from ad trackers and failed network requests
+  ses.webRequest.onErrorOccurred((_details) => {
+    // silently swallow — these are ad/tracker failures, not app bugs
+  })
+
+  // Handle new-window events from webviews (links with target="_blank")
+  win.webContents.on('did-attach-webview', (_event, wc) => {
+    wc.setWindowOpenHandler(({ url }) => {
+      // Navigate the webview itself instead of opening a system window
+      wc.loadURL(url)
+      return { action: 'deny' }
+    })
+  })
 }
 
 app.whenReady().then(() => {
