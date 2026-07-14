@@ -23,15 +23,15 @@ export function highlightedSummary(summary: string, keyPoints: string[]): string
       continue
     }
     const rawPhrase = summary.slice(i, i + maxLen)
-    out += '<mark class="adhd-highlight">' + escapeHtml(rawPhrase) + '</mark>'
+    out += '<mark class="cclear-highlight">' + escapeHtml(rawPhrase) + '</mark>'
     i += maxLen
   }
   return out
 }
 
 const ORIG_TOGGLE_JS = `(function(btn){
-  var p=btn.closest('[data-adhd-simplified]');
-  var o=p&&p.querySelector('.adhd-original-inline');
+  var p=btn.closest('[data-cclear-simplified]');
+  var o=p&&p.querySelector('.cclear-original-inline');
   if(o){o.hidden=!o.hidden;btn.textContent=o.hidden?'show original':'hide original';}
 })(this)`
 
@@ -48,7 +48,7 @@ export function buildReplacementInnerHtml(item: SummaryInline, strippedOriginalF
   const summary = item.summary ?? ''
   const kp = item.keyPoints?.filter(Boolean).map(String) ?? []
 
-  let html = '<span class="adhd-summary-text" style="color: inherit;">' + highlightedSummary(summary, kp) + '</span>'
+  let html = '<span class="cclear-summary-text">' + highlightedSummary(summary, kp) + '</span>'
 
   if (isSearch) {
     return html
@@ -56,8 +56,8 @@ export function buildReplacementInnerHtml(item: SummaryInline, strippedOriginalF
 
   const list = kp.slice(0, 3)
   if (list.length) {
-    html += '<p class="adhd-look-for">Look for</p>'
-    html += '<ul class="adhd-keypoints-inline">'
+    html += '<p class="cclear-look-for">Look for</p>'
+    html += '<ul class="cclear-keypoints-inline">'
     for (const phrase of list) {
       html += '<li>' + escapeHtml(String(phrase)) + '</li>'
     }
@@ -65,14 +65,14 @@ export function buildReplacementInnerHtml(item: SummaryInline, strippedOriginalF
   }
 
   html +=
-    '<button type="button" class="adhd-toggle-inline" onclick="' +
+    '<button type="button" class="cclear-toggle-inline" onclick="' +
     ORIG_TOGGLE_JS.replace(/"/g, '&quot;') +
     '">show original</button>'
 
   const origPlain =
     item.original != null ? String(item.original).replace(/\r/g, '') : strippedOriginalFallback
 
-  html += '<div class="adhd-original-inline" hidden>' + escapeHtml(origPlain) + '</div>'
+  html += '<div class="cclear-original-inline" hidden>' + escapeHtml(origPlain) + '</div>'
 
   return html
 }
