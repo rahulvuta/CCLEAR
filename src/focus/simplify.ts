@@ -5,8 +5,8 @@ import { buildReplacementInnerHtml } from './simplifyApplyHtml'
 export function getExtractChunksScript(minChars = 140, isSearch = false): string {
   return `(() => {
     const isSearch = ${isSearch};
-    for (const n of Array.from(document.querySelectorAll('[data-adhd-src-id]'))) {
-      n.removeAttribute('data-adhd-src-id');
+    for (const n of Array.from(document.querySelectorAll('[data-cclear-src-id]'))) {
+      n.removeAttribute('data-cclear-src-id');
     }
     const MIN = ${minChars};
     const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','PRE','TEXTAREA','SVG']);
@@ -19,11 +19,13 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
       if (!el.closest(contentShell)) return;
       if (el.closest(avoidSel)) return;
       if (isSearch && (el.tagName === 'A' || el.querySelector('a'))) return;
-      if (el.parentElement && el.parentElement.closest('[data-adhd-src-id]')) return;
-      const t = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+      if (el.parentElement && el.parentElement.closest('[data-cclear-src-id]')) return;
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+      if (el.querySelector('noscript')) return;
+      const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
       if (t.length < minLen) return;
-      const id = 'adhd-b-' + idx++;
-      el.setAttribute('data-adhd-src-id', id);
+      const id = 'cclear-b-' + idx++;
+      el.setAttribute('data-cclear-src-id', id);
       blocks.push({
         id: id,
         text: t,
@@ -82,13 +84,13 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
   return `(() => {
     const payload = ${json};
     for (const item of payload) {
-      const el = document.querySelector('[data-adhd-src-id="' + item.id + '"]');
+      const el = document.querySelector('[data-cclear-src-id="' + item.id + '"]');
       if (!el) continue;
-      if (el.getAttribute('data-adhd-simplified')) continue;
+      if (el.getAttribute('data-cclear-simplified')) continue;
 
       const origHtml = el.innerHTML;
-      el.setAttribute('data-adhd-original-html', origHtml);
-      el.setAttribute('data-adhd-simplified', isSearch ? 'inline' : 'true');
+      el.setAttribute('data-cclear-original-html', origHtml);
+      el.setAttribute('data-cclear-simplified', ${isSearch ? "'inline'" : "'true'"});
       el.innerHTML = item.__html;
     }
   })();`
@@ -96,14 +98,14 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
 
 export function buildRestoreSummariesScript(): string {
   return `(() => {
-    const els = Array.from(document.querySelectorAll('[data-adhd-simplified]'));
+    const els = Array.from(document.querySelectorAll('[data-cclear-simplified]'));
     for (const el of els) {
-      const origHtml = el.getAttribute('data-adhd-original-html');
+      const origHtml = el.getAttribute('data-cclear-original-html');
       if (origHtml != null) {
         el.innerHTML = origHtml;
       }
-      el.removeAttribute('data-adhd-simplified');
-      el.removeAttribute('data-adhd-original-html');
+      el.removeAttribute('data-cclear-simplified');
+      el.removeAttribute('data-cclear-original-html');
     }
   })();`
 }
