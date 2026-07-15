@@ -44,8 +44,11 @@ export function WebviewHost({ tabs, activeId, setWebviewRef }: Props) {
             data-tab={t.id}
             src={t.url}
             className={visible ? 'webviewShown' : 'webviewHidden'}
-            partition="persist:adhd-browser"
-            webpreferences="contextIsolation=yes, javascript=yes"
+            partition="persist:cclear-browser"
+            webpreferences="contextIsolation=yes, javascript=yes, images=yes, webgl=yes"
+            // @ts-expect-error – Electron webview attrs
+            allowpopups="true"
+            useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           />
         )
       })}
