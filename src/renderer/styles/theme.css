@@ -32,28 +32,28 @@ input {
 }
 
 :root {
-  --surface-0: #f4f6f8;
-  --surface-1: #ffffff;
-  --surface-2: #e9ecef;
-  --border: #dce1e6;
-  --muted: #6b7280;
-  --text: #1f2937;
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --risk: #f59e0b;
+  --surface-0: #f7f6f3;
+  --surface-1: #fdfcfb;
+  --surface-2: #ebeae6;
+  --border: #dfdcd7;
+  --muted: #7b817d;
+  --text: #323533;
+  --accent: #5a82a0;
+  --accent-strong: #456b87;
+  --risk: #c17754;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface-0: #111827;
-    --surface-1: #1f2937;
-    --surface-2: #374151;
-    --border: #4b5563;
-    --muted: #9ca3af;
-    --text: #f9fafb;
-    --accent: #60a5fa;
-    --accent-strong: #3b82f6;
-    --risk: #fbbf24;
+    --surface-0: #1d2123;
+    --surface-1: #252a2d;
+    --surface-2: #2f3539;
+    --border: #3b4247;
+    --muted: #8c969b;
+    --text: #dce1e4;
+    --accent: #6b8fae;
+    --accent-strong: #8fb6d8;
+    --risk: #cc8462;
   }
 }
 
@@ -104,11 +104,16 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .iconBtn:hover {
   background: var(--surface-2);
+  transform: scale(1.05);
+}
+
+.iconBtn:active {
+  transform: scale(0.95);
 }
 
 .iconBtn:focus-visible {
@@ -130,13 +135,15 @@ input {
   color: var(--text);
   padding: 0 16px;
   font-size: 14px;
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .addrInput:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-color: var(--accent-strong);
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface-1);
+  box-shadow: 0 0 0 3px rgba(90, 130, 160, 0.15), inset 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .toolbarRight {
@@ -163,7 +170,7 @@ input {
   background: var(--surface-2);
   position: relative;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .switch::after {
@@ -175,7 +182,7 @@ input {
   top: 2px;
   left: 2px;
   background: #fff;
-  transition: transform 0.15s ease;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
@@ -186,6 +193,10 @@ input.switch:checked {
 
 input.switch:checked::after {
   transform: translateX(18px);
+}
+
+input.switch:active {
+  transform: scale(0.95);
 }
 
 .secondaryBtn {
@@ -199,16 +210,26 @@ input.switch:checked::after {
   white-space: nowrap;
   font-weight: 500;
   font-size: 13px;
-  transition: opacity 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 
 .secondaryBtn:hover {
-  opacity: 0.9;
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.secondaryBtn:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
 .secondaryBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .riskBadge {
@@ -238,11 +259,16 @@ input.switch:checked::after {
   gap: 8px;
   margin-right: 2px;
   position: relative;
-  transition: background 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: bottom center;
 }
 
 .tab:hover {
   background: var(--surface-2);
+}
+
+.tab:active {
+  transform: scale(0.98);
 }
 
 .tab[data-active='true'] {
@@ -262,9 +288,10 @@ input.switch:checked::after {
 }
 
 .tabTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 13px;
   background: none;
   border: none;
@@ -273,6 +300,21 @@ input.switch:checked::after {
   padding: 0;
   flex: 1;
   text-align: left;
+  min-width: 0;
+}
+
+.tabFavicon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.tabTitleText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .tabClose {
@@ -286,7 +328,7 @@ input.switch:checked::after {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: all 0.2s;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .tab:hover .tabClose, .tab[data-active='true'] .tabClose {
@@ -295,6 +337,11 @@ input.switch:checked::after {
 
 .tabClose:hover {
   background: rgba(0,0,0,0.1);
+  transform: scale(1.1);
+}
+
+.tabClose:active {
+  transform: scale(0.9);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -316,11 +363,16 @@ input.switch:checked::after {
   justify-content: center;
   margin-left: 4px;
   margin-bottom: 3px;
-  transition: background 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .tabNewBtn:hover {
   background: var(--surface-2);
+  transform: scale(1.1);
+}
+
+.tabNewBtn:active {
+  transform: scale(0.95);
 }
 
 .viewport {
@@ -333,12 +385,15 @@ input.switch:checked::after {
 .webviewHidden {
   position: absolute !important;
   inset: 0;
-  display: none;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
 }
 
 .webviewShown {
   position: absolute;
   inset: 0;
+  z-index: 1;
 }
 
 .chatDrawer {
@@ -490,12 +545,17 @@ input.switch:checked::after {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .pill:hover {
   background: var(--surface-2);
   border-color: var(--muted);
+  transform: translateY(-1px);
+}
+
+.pill:active {
+  transform: translateY(1px) scale(0.98);
 }
 
 .chatInputRow {
@@ -518,12 +578,13 @@ input.switch:checked::after {
   font-family: inherit;
   font-size: 14px;
   line-height: 1.4;
-  transition: border-color 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .chatTextarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(90, 130, 160, 0.15);
 }
 
 .sendBtn {
@@ -534,16 +595,22 @@ input.switch:checked::after {
   color: #fff;
   cursor: pointer;
   font-weight: 500;
-  transition: opacity 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sendBtn:hover {
-  opacity: 0.9;
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+.sendBtn:active {
+  transform: translateY(1px) scale(0.95);
 }
 
 .sendBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .emptyHint {
@@ -636,11 +703,11 @@ input.switch:checked::after {
   font-size: 12px;
   color: var(--text);
   border-left: 2px solid var(--accent);
-  animation: slideDown 0.2s ease-out;
+  animation: slideDown 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 @keyframes slideDown {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes spin {

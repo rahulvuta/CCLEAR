@@ -14,11 +14,15 @@ function WhyAmIHereItem({ summary }: ItemProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {summary.originUrl && summary.originUrl !== 'None' && (
-        <div className="whyBoxRow">
-          <strong>From:</strong> <span title={summary.originUrl}>{new URL(summary.originUrl).hostname}</span>
-        </div>
-      )}
+      {summary.originUrl && summary.originUrl !== 'None' && (() => {
+        let hostname = summary.originUrl
+        try { hostname = new URL(summary.originUrl).hostname } catch { /* keep raw */ }
+        return (
+          <div className="whyBoxRow">
+            <strong>From:</strong> <span title={summary.originUrl}>{hostname}</span>
+          </div>
+        )
+      })()}
       <div className="whyBoxRow">
         <strong>Goal:</strong> {summary.inferredReason}
       </div>
