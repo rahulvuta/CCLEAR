@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
 
-export type UITab = { id: string; title: string; url: string; group?: string }
+export type UITab = { id: string; title: string; url: string; group?: string; favicon?: string }
 
 type Props = {
   tabs: UITab[]
@@ -41,7 +41,10 @@ export function TabStrip({ tabs, activeId, setActiveId, onClose, onNewTab }: Pro
             {g.tabs.map((tab) => (
               <div key={tab.id} className="tab" role="tab" data-active={tab.id === activeId ? 'true' : 'false'}>
                 <button type="button" className="tabTitle" title={tab.url} onClick={() => setActiveId(tab.id)}>
-                  {tab.title || tab.url || 'New tab'}
+                  {tab.favicon && <img src={tab.favicon} className="tabFavicon" alt="" />}
+                  <span className="tabTitleText">
+                    {tab.title || (tab.url === 'about:blank' ? 'New tab' : tab.url) || 'New tab'}
+                  </span>
                 </button>
                 <button
                   type="button"
