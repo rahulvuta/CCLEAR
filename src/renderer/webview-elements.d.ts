@@ -3,7 +3,7 @@ import type { HTMLAttributes } from 'react'
 /**
  * Narrow typing for Electron's `<webview>` element.
  */
-export type ADHDWebViewProps = Omit<HTMLAttributes<HTMLElement>, 'dangerouslySetInnerHTML'> & {
+export type CCLEARWebViewProps = Omit<HTMLAttributes<HTMLElement>, 'dangerouslySetInnerHTML'> & {
   src?: string
   preload?: string
   partition?: string
@@ -16,7 +16,7 @@ export type ADHDWebViewProps = Omit<HTMLAttributes<HTMLElement>, 'dangerouslySet
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      webview: ADHDWebViewProps
+      webview: CCLEARWebViewProps
     }
   }
 }

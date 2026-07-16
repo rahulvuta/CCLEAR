@@ -1,4 +1,4 @@
-# ADHD Browser (MVP)
+# CCLEAR (MVP)
 
 A macOS-friendly Electron wrapper around a minimalist browser chrome with:
 
@@ -17,8 +17,8 @@ ollama pull mistral:7b
 
 2. Optionally set these environment variables:
 
-- `ADHD_OLLAMA_HOST` defaults to `http://127.0.0.1:11434`
-- `ADHD_OLLAMA_MODEL` defaults to `mistral:7b`
+- `CCLEAR_OLLAMA_HOST` defaults to `http://127.0.0.1:11434`
+- `CCLEAR_OLLAMA_MODEL` defaults to `mistral:7b`
 
 ## Development
 

@@ -31,6 +31,8 @@ function normalizeUrl(raw: string): string {
   if (/^https?:\/\//i.test(t)) return t
   const local = /^mailto:|^file:/i.test(t)
   if (local) return t
+  // Handle localhost and IP addresses
+  if (/^localhost(:\d+)?/i.test(t) || /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/i.test(t)) return `http://${t}`
   if (t.includes('.') && !t.includes(' ')) return `https://${t}`
   const q = encodeURIComponent(t)
   return `https://duckduckgo.com/?q=${q}`
@@ -94,7 +96,7 @@ async function waitForWebviewQuiet(w: WebviewTag): Promise<void> {
 
 export function App() {
   const firstId = useMemo(() => String(crypto.randomUUID()), [])
-  const [tabs, setTabs] = useState<UITab[]>([{ id: firstId, url: 'about:blank', title: 'Home' }])
+  const [tabs, setTabs] = useState<UITab[]>([{ id: firstId, url: 'about:blank', title: '' }])
   const [activeId, setActiveId] = useState(firstId)
   const [navUrl, setNavUrl] = useState('about:blank')
   const [focusModeEnabled, setFocusModeEnabled] = useState(false)
@@ -152,11 +154,19 @@ export function App() {
     [tabs, activeId]
   )
 
+  /** Inject reading-assist CSS into a webview (idempotent) */
   const injectAssist = useCallback(async (w: WebviewTag) => {
     try {
       await w.executeJavaScript(getInjectReadingAssistScript(), true)
-      /* Keep baseline zoom: never enlarge site text when Focus / simplify runs */
-      await w.executeJavaScript(getSetFocusVisualScript(false), true)
+    } catch {
+      //
+    }
+  }, [])
+
+  /** Apply or remove the focus-visual class on a webview */
+  const applyFocusVisual = useCallback(async (w: WebviewTag, enabled: boolean) => {
+    try {
+      await w.executeJavaScript(getSetFocusVisualScript(enabled), true)
     } catch {
       //
     }
@@ -180,7 +190,7 @@ export function App() {
     }
     const cacheKey = simplifyCacheKey(tabId, trimmed)
     const already = (await w.executeJavaScript(
-      `document.querySelector('[data-adhd-simplified]') != null`,
+      `document.querySelector('[data-cclear-simplified]') != null`,
       true
     )) as boolean
     if (already) return
@@ -233,7 +243,7 @@ export function App() {
       await w.executeJavaScript(buildApplySummariesScript(out, isSearch), true)
       simplifyApplyCacheRef.current.set(cacheKey, out)
     } catch (e) {
-      console.warn('[adhd] focus simplify:', e instanceof Error ? e.message : e)
+      console.warn('[cclear] focus simplify:', e instanceof Error ? e.message : e)
     } finally {
       setSimplifyBusy(false)
     }
@@ -243,7 +253,7 @@ export function App() {
   const enqueueFocusAutoSimplify = useCallback((tabId: string, pageUrl: string) => {
     simplifyChainRef.current = simplifyChainRef.current
       .then(() => runFocusAutoSimplifyImpl(tabId, pageUrl))
-      .catch((e) => console.warn('[adhd] focus simplify chain:', e))
+      .catch((e) => console.warn('[cclear] focus simplify chain:', e))
   }, [runFocusAutoSimplifyImpl])
 
   runFocusAutoSimplifyRef.current = enqueueFocusAutoSimplify
@@ -320,8 +330,15 @@ export function App() {
 
       const updUrlFromNav = (_e: any, url: string) => {
         invalidateSimplifyLatestRef.current(id)
+        
+        let favicon = ''
+        try {
+          const host = new URL(url).hostname
+          if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+        } catch { }
+
         setTabs((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, url: url || t.url } : t))
+          prev.map((t) => (t.id === id ? { ...t, url: url || t.url, favicon: favicon || t.favicon } : t))
         )
         if (activeIdRef.current === id) setNavUrl(url || '')
 
@@ -337,11 +354,26 @@ export function App() {
           prev.map((t) => (t.id === id ? { ...t, title: title || t.title } : t))
         )
       }
+      
+      const onFavicon = (_e: any, favicons: string[]) => {
+        if (favicons && favicons[0]) {
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, favicon: favicons[0] } : t))
+          )
+        }
+      }
 
       const onLoad = async () => {
         await injectAssist(w)
+        await applyFocusVisual(w, focusModeEnabledRef.current)
         const tid = id
         
+        // Sync title on load just in case event was missed
+        const currentTitle = w.getTitle()
+        if (currentTitle && currentTitle !== 'about:blank') {
+          setTabs(prev => prev.map(t => t.id === tid ? { ...t, title: currentTitle } : t))
+        }
+
         const pageUrl = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
         if (pageUrl && !pageUrl.startsWith('about:')) {
           setContextLoading(p => ({ ...p, [tid]: true }))
@@ -366,15 +398,20 @@ export function App() {
       w.addEventListener('did-navigate-in-page', updUrlFromNav as any)
       w.addEventListener('did-finish-load', onLoad)
       w.addEventListener('page-title-updated', onTitle as any)
+      w.addEventListener('page-favicon-updated', onFavicon as any)
     },
     [injectAssist]
   )
 
   useEffect(() => {
-    const w = webviewRefs.current[activeId]
-    if (!w) return
-    void injectAssist(w).catch(() => {})
-  }, [focusModeEnabled, activeId, injectAssist])
+    // Apply reading assist + focus visual to all tabs when focus mode toggles
+    Object.entries(webviewRefs.current).forEach(([, w]) => {
+      if (w) {
+        void injectAssist(w).catch(() => {})
+        void applyFocusVisual(w, focusModeEnabled).catch(() => {})
+      }
+    })
+  }, [focusModeEnabled, activeId, injectAssist, applyFocusVisual])
 
   const setWebviewRef = useCallback(
     (id: string, el: WebviewTag | null) => {
@@ -387,8 +424,15 @@ export function App() {
   function goNavigate() {
     const nextUrl = normalizeUrl(navUrl)
     setNavUrl(nextUrl)
+    
+    let favicon = ''
+    try {
+      const host = new URL(nextUrl).hostname
+      if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+    } catch { }
+
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeId ? { ...t, url: nextUrl, title: t.title } : t))
+      prev.map((t) => (t.id === activeId ? { ...t, url: nextUrl, title: t.title, favicon: favicon || t.favicon } : t))
     )
   }
 
@@ -418,7 +462,7 @@ export function App() {
 
   function newTab() {
     const id = String(crypto.randomUUID())
-    setTabs((t) => [...t, { id, url: 'about:blank', title: 'New tab' }])
+    setTabs((t) => [...t, { id, url: 'about:blank', title: '' }])
     setActiveId(id)
   }
 
@@ -428,7 +472,12 @@ export function App() {
     if (idx < 0) return
 
     delete webviewRefs.current[idToClose]
+    delete historyMapRef.current[idToClose]
     invalidateSimplifyStateForTab(idToClose)
+
+    // Clean up context state for the closed tab
+    setTabContexts(p => { const n = { ...p }; delete n[idToClose]; return n })
+    setContextLoading(p => { const n = { ...p }; delete n[idToClose]; return n })
 
     const filtered = tabs.filter((t) => t.id !== idToClose)
 
@@ -450,7 +499,38 @@ export function App() {
     if (!override) setChatInput('')
     try {
       const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId)
-      setChatMsgs([...nextMsgs, { role: 'assistant', content: assistant }])
+      
+      // Execute AI actions
+      if (assistant.includes('[GOTO:')) {
+        const m = assistant.match(/\[GOTO:\s*([^\]]+)\]/i)
+        if (m) {
+          const url = normalizeUrl(m[1])
+          const aid = activeIdRef.current
+          setNavUrl(url)
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+        }
+      }
+      if (assistant.includes('[NEW_TAB')) {
+        const m = assistant.match(/\[NEW_TAB:?\s*([^\]]*)\]/i)
+        const url = (m && m[1].trim()) ? normalizeUrl(m[1]) : 'about:blank'
+        const id = String(crypto.randomUUID())
+        setTabs(t => [...t, { id, url, title: '' }])
+        setActiveId(id)
+      }
+      if (assistant.includes('[BACK]')) goBack()
+      if (assistant.includes('[FORWARD]')) goForward()
+      if (assistant.includes('[RELOAD]')) reload()
+
+      // Clean display message
+      const displayMsg = assistant
+        .replace(/\[GOTO:[^\]]+\]/gi, '')
+        .replace(/\[NEW_TAB:?[^\]]*\]/gi, '')
+        .replace(/\[BACK\]/gi, '')
+        .replace(/\[FORWARD\]/gi, '')
+        .replace(/\[RELOAD\]/gi, '')
+        .trim()
+
+      setChatMsgs([...nextMsgs, { role: 'assistant', content: displayMsg || assistant }])
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setChatMsgs([...nextMsgs, { role: 'assistant', content: `Assistant error:\n${msg}` }])
@@ -459,23 +539,29 @@ export function App() {
     }
   }
 
+  // Stable key for tab-grouping: only re-run when the set of URLs actually changes
+  const tabUrlsKey = useMemo(() => tabs.map(t => t.url).sort().join('|'), [tabs])
+
   useEffect(() => {
     if (tabs.length < 2) return
+    const currentTabs = tabsRef.current
+    const items: TabContextItem[] = currentTabs.map(t => ({ id: t.id, title: t.title, url: t.url, isActive: t.id === activeIdRef.current }))
     const timer = setTimeout(async () => {
       try {
-        const groups = await window.cclearBrowser.ai.groupTabs(tabContextItems)
+        const groups = await window.cclearBrowser.ai.groupTabs(items)
         if (groups && groups.length > 0) {
           setTabs(prev => prev.map(t => {
             const g = groups.find(x => x.id === t.id)
             return g ? { ...t, group: g.group } : t
           }))
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
-    }, 2500)
+    }, 3000)
     return () => clearTimeout(timer)
-  }, [tabs.map(t => t.url).join(','), tabs.length, tabContextItems])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabUrlsKey, tabs.length])
 
   return (
     <div className="appShell">
@@ -498,7 +584,7 @@ export function App() {
       </div>
       <aside
         className="chatDrawer"
-        id="adhd-chat-drawer"
+        id="cclear-chat-drawer"
         data-open={sidebarOpen ? 'true' : 'false'}
       >
         <div className="chatDrawerInner">
@@ -508,7 +594,7 @@ export function App() {
             onClick={() => setSidebarOpen(!sidebarOpen)}
             title={sidebarOpen ? 'Collapse assistant' : 'Expand assistant'}
             aria-expanded={sidebarOpen}
-            aria-controls="adhd-chat-panel"
+            aria-controls="cclear-chat-panel"
           >
             {sidebarOpen ? (
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -520,7 +606,7 @@ export function App() {
               </svg>
             )}
           </button>
-          <div className="chatPanel" id="adhd-chat-panel" aria-hidden={!sidebarOpen}>
+          <div className="chatPanel" id="cclear-chat-panel" aria-hidden={!sidebarOpen}>
             <WhyAmIHereBox summaries={tabContexts[activeId] || []} isLoading={contextLoading[activeId] || false} />
             <ChatSidebar
               aiHealthy={aiHealthy}
