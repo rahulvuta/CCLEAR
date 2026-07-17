@@ -264,4 +264,32 @@ export function registerAiIpc() {
       return { inferredReason: 'Loading...', summary: 'Unable to analyze.' }
     }
   })
+
+  ipcMain.handle('ai:recommend-links', async (_evt, historyUrls: string[]) => {
+    if (historyUrls.length === 0) return []
+    const health = await checkOllamaHealth()
+    if (!health.ok) return []
+
+    const system = [
+      'You recommend exactly 6 websites for a user based on their browsing history.',
+      'Output ONLY a JSON array of objects with "name" and "url".',
+      'Example: [{"name":"Google", "url":"https://google.com"}, {"name":"GitHub", "url":"https://github.com"}]',
+      'Pick the most relevant, useful sites related to their history. If history is short, fill the rest with popular safe sites like Wikipedia or YouTube.',
+      'Return valid JSON only.'
+    ].join('\n')
+
+    const prompt = `Recent History:\n${historyUrls.slice(-30).join('\n')}\n\nRecommend 6 websites.`
+
+    try {
+      const raw = await ollamaGenerate({
+        system, prompt, temperature: 0.3, numPredict: 300, timeoutMs: 5000
+      })
+      const t = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+      const parsed = JSON.parse(t)
+      if (Array.isArray(parsed)) return parsed.slice(0, 6)
+      return []
+    } catch {
+      return []
+    }
+  })
 }
