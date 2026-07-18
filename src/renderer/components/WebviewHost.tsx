@@ -1,14 +1,17 @@
 import { useEffect } from 'react'
 import type { WebviewTag } from 'electron'
 import type { UITab } from './TabStrip'
+import { NewTabPage } from './NewTabPage'
 
 type Props = {
   tabs: UITab[]
   activeId: string
   setWebviewRef: (id: string, el: WebviewTag | null) => void
+  onNavigate: (url: string) => void
+  recentHistory: string[]
 }
 
-export function WebviewHost({ tabs, activeId, setWebviewRef }: Props) {
+export function WebviewHost({ tabs, activeId, setWebviewRef, onNavigate, recentHistory }: Props) {
   useEffect(() => {
     const w = document.querySelector(`webview[data-tab="${CSS.escape(activeId)}"]`) as WebviewTag | null
     if (!w) return
@@ -19,10 +22,14 @@ export function WebviewHost({ tabs, activeId, setWebviewRef }: Props) {
     }
   }, [activeId, tabs])
 
+  const activeTab = tabs.find(t => t.id === activeId)
+  const showNewTab = activeTab && (!activeTab.url || activeTab.url === 'about:blank')
+
   return (
     <main className="viewport">
       {tabs.map((t) => {
         const visible = t.id === activeId
+        const isBlank = !t.url || t.url === 'about:blank'
         return (
           <webview
             key={t.id}
@@ -43,8 +50,8 @@ export function WebviewHost({ tabs, activeId, setWebviewRef }: Props) {
             }}
             data-tab={t.id}
             src={t.url}
-            className={visible ? 'webviewShown' : 'webviewHidden'}
-            partition="persist:cclear-browser"
+            className={visible && !isBlank ? 'webviewShown' : 'webviewHidden'}
+            partition="persist:adhd-browser"
             webpreferences="contextIsolation=yes, javascript=yes, images=yes, webgl=yes"
             // @ts-expect-error – Electron webview attrs
             allowpopups="true"
@@ -52,6 +59,7 @@ export function WebviewHost({ tabs, activeId, setWebviewRef }: Props) {
           />
         )
       })}
+      {showNewTab && <NewTabPage onNavigate={onNavigate} recentHistory={recentHistory} />}
     </main>
   )
 }
