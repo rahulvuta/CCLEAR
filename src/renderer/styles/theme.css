@@ -718,3 +718,255 @@ input.switch:active {
 .spinning {
   animation: spin 2s linear infinite;
 }
+
+/* ═══════════════════════════════════════════ */
+/*             New Tab Page                    */
+/* ═══════════════════════════════════════════ */
+
+.ntpRoot {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-0);
+  overflow: hidden;
+}
+
+/* Ambient floating orbs */
+.ntpAmbient {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ntpOrb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.12;
+  animation: ntpFloat 20s ease-in-out infinite;
+}
+.ntpOrb1 {
+  width: 340px; height: 340px;
+  background: var(--accent);
+  top: -80px; left: 10%;
+  animation-delay: 0s;
+}
+.ntpOrb2 {
+  width: 260px; height: 260px;
+  background: #7fa48b;
+  bottom: -60px; right: 15%;
+  animation-delay: -7s;
+}
+.ntpOrb3 {
+  width: 200px; height: 200px;
+  background: var(--accent-strong);
+  top: 40%; left: 55%;
+  animation-delay: -13s;
+}
+@keyframes ntpFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -20px) scale(1.05); }
+  50% { transform: translate(-20px, 15px) scale(0.95); }
+  75% { transform: translate(15px, 25px) scale(1.02); }
+}
+
+.ntpContent {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 560px;
+  width: 100%;
+  padding: 0 24px;
+  animation: ntpFadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes ntpFadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.ntpClock {
+  font-size: 56px;
+  font-weight: 200;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.ntpBrand {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0;
+}
+
+.ntpSlogan {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.ntpGreeting {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+  font-weight: 500;
+}
+
+.ntpSearchForm {
+  width: 100%;
+  margin: 8px 0 4px;
+}
+.ntpSearchWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 0 18px;
+  height: 48px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.ntpSearchWrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(90, 130, 160, 0.15), 0 2px 8px rgba(0,0,0,0.04);
+}
+.ntpSearchIcon {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.ntpSearchInput {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  font-family: inherit;
+}
+.ntpSearchInput::placeholder {
+  color: var(--muted);
+}
+
+.ntpLinks {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  width: 100%;
+}
+.ntpLinkWrapper {
+  position: relative;
+  display: flex;
+  flex: 0 0 calc(16.666% - 10px);
+  max-width: 90px;
+  min-width: 70px;
+}
+.ntpLinkCard {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.ntpLinkDelete {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  z-index: 2;
+}
+.ntpLinkWrapper:hover .ntpLinkDelete {
+  opacity: 1;
+  transform: scale(1);
+}
+.ntpLinkDelete:hover {
+  background: var(--risk);
+  color: #fff;
+  border-color: var(--risk);
+}
+.ntpLinkAdd {
+  border: 1px dashed var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+.ntpLinkAdd:hover {
+  background: var(--surface-1);
+  border-color: var(--text);
+}
+.ntpLinkCard:hover {
+
+  background: var(--surface-2);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+.ntpLinkCard:active {
+  transform: translateY(1px) scale(0.97);
+}
+.ntpLinkIcon {
+  font-size: 22px;
+  line-height: 1;
+}
+.ntpLinkName {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.ntpTip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 10px 18px;
+  border-radius: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.5;
+}
+.ntpTipLabel {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+

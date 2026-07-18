@@ -331,21 +331,26 @@ export function App() {
       const updUrlFromNav = (_e: any, url: string) => {
         invalidateSimplifyLatestRef.current(id)
         
+        const effectiveUrl = url || 'about:blank'
         let favicon = ''
-        try {
-          const host = new URL(url).hostname
-          if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
-        } catch { }
+        if (effectiveUrl !== 'about:blank') {
+          try {
+            const host = new URL(effectiveUrl).hostname
+            if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+          } catch { }
+        }
 
         setTabs((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, url: url || t.url, favicon: favicon || t.favicon } : t))
+          prev.map((t) => (t.id === id ? { ...t, url: effectiveUrl, favicon: favicon || t.favicon } : t))
         )
-        if (activeIdRef.current === id) setNavUrl(url || '')
+        if (activeIdRef.current === id) {
+          setNavUrl(effectiveUrl === 'about:blank' ? '' : effectiveUrl)
+        }
 
-        if (url && !url.startsWith('about:')) {
+        if (effectiveUrl && effectiveUrl !== 'about:blank') {
           if (!historyMapRef.current[id]) historyMapRef.current[id] = []
           const arr = historyMapRef.current[id]
-          if (arr[arr.length - 1] !== url) arr.push(url)
+          if (arr[arr.length - 1] !== effectiveUrl) arr.push(effectiveUrl)
         }
       }
 
@@ -396,6 +401,9 @@ export function App() {
 
       w.addEventListener('did-navigate', updUrlFromNav as any)
       w.addEventListener('did-navigate-in-page', updUrlFromNav as any)
+      w.addEventListener('load-commit', ((e: any) => {
+        if (e.isMainFrame) updUrlFromNav(e, e.url)
+      }) as any)
       w.addEventListener('did-finish-load', onLoad)
       w.addEventListener('page-title-updated', onTitle as any)
       w.addEventListener('page-favicon-updated', onFavicon as any)
@@ -563,6 +571,109 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabUrlsKey, tabs.length])
 
+  // Keyboard shortcuts from native menu
+  useEffect(() => {
+    return window.cclearBrowser.onShortcut((action, ...args) => {
+      const currentTabs = tabsRef.current
+      const currentActiveId = activeIdRef.current
+      const w = webviewRefs.current[currentActiveId]
+
+      switch (action) {
+        case 'new-tab': {
+          const id = String(crypto.randomUUID())
+          setTabs((t) => [...t, { id, url: 'about:blank', title: '' }])
+          setActiveId(id)
+          break
+        }
+        case 'close-tab': {
+          if (currentTabs.length <= 1) break
+          const idx = currentTabs.findIndex((t) => t.id === currentActiveId)
+          if (idx < 0) break
+          delete webviewRefs.current[currentActiveId]
+          delete historyMapRef.current[currentActiveId]
+          invalidateSimplifyStateForTab(currentActiveId)
+          setTabContexts(p => { const n = { ...p }; delete n[currentActiveId]; return n })
+          setContextLoading(p => { const n = { ...p }; delete n[currentActiveId]; return n })
+          const filtered = currentTabs.filter((t) => t.id !== currentActiveId)
+          const nextActive = currentTabs[idx - 1]?.id ?? filtered[0]?.id ?? currentActiveId
+          setTabs(filtered)
+          setActiveId(nextActive)
+          break
+        }
+        case 'focus-address': {
+          const input = document.querySelector('.addrInput') as HTMLInputElement
+          if (input) {
+            input.focus()
+            input.select()
+          }
+          break
+        }
+        case 'reload':
+          try { w?.reload() } catch {}
+          break
+        case 'hard-reload':
+          try { w?.reloadIgnoringCache() } catch {}
+          break
+        case 'zoom-in':
+          if (w) w.setZoomFactor(Math.min(w.getZoomFactor() + 0.1, 3.0))
+          break
+        case 'zoom-out':
+          if (w) w.setZoomFactor(Math.max(w.getZoomFactor() - 0.1, 0.25))
+          break
+        case 'zoom-reset':
+          if (w) w.setZoomFactor(1.0)
+          break
+        case 'toggle-focus':
+          setFocusModeEnabled(!focusModeEnabledRef.current)
+          break
+        case 'toggle-sidebar':
+          setSidebarOpen(prev => !prev)
+          break
+        case 'go-back':
+          try { w?.goBack() } catch {}
+          break
+        case 'go-forward':
+          try { w?.goForward() } catch {}
+          break
+        case 'next-tab': {
+          if (currentTabs.length > 1) {
+            const idx = currentTabs.findIndex(t => t.id === currentActiveId)
+            setActiveId(currentTabs[(idx + 1) % currentTabs.length].id)
+          }
+          break
+        }
+        case 'prev-tab': {
+          if (currentTabs.length > 1) {
+            const idx = currentTabs.findIndex(t => t.id === currentActiveId)
+            setActiveId(currentTabs[(idx - 1 + currentTabs.length) % currentTabs.length].id)
+          }
+          break
+        }
+        case 'go-tab': {
+          const tabIndex = args[0] as number
+          if (tabIndex === -1 && currentTabs.length > 0) {
+            setActiveId(currentTabs[currentTabs.length - 1].id)
+          } else if (tabIndex >= 0 && tabIndex < currentTabs.length) {
+            setActiveId(currentTabs[tabIndex].id)
+          }
+          break
+        }
+      }
+    })
+  }, [])
+
+  const recentHistory = useMemo(() => {
+    const all = Object.values(historyMapRef.current).flat()
+    const unique = [...new Set(all)].filter(url => 
+      url && 
+      !url.startsWith('about:') && 
+      !url.includes('duckduckgo.com/?q=') && 
+      !url.includes('google.com/search')
+    )
+    return unique.slice(-30)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabUrlsKey])
+
   return (
     <div className="appShell">
       <div className="chrome">
@@ -580,7 +691,22 @@ export function App() {
           }}
           simplifyBusy={simplifyBusy}
         />
-        <WebviewHost tabs={tabs} activeId={activeId} setWebviewRef={(id, el) => setWebviewRef(id, el)} />
+        <WebviewHost
+          recentHistory={recentHistory}
+          tabs={tabs}
+          activeId={activeId}
+          setWebviewRef={(id, el) => setWebviewRef(id, el)}
+          onNavigate={(url) => {
+            const normalized = normalizeUrl(url)
+            setNavUrl(normalized)
+            let favicon = ''
+            try {
+              const host = new URL(normalized).hostname
+              if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+            } catch { }
+            setTabs(prev => prev.map(t => t.id === activeId ? { ...t, url: normalized, title: '', favicon: favicon || t.favicon } : t))
+          }}
+        />
       </div>
       <aside
         className="chatDrawer"
