@@ -328,10 +328,19 @@ export function App() {
       if (setupOnce.current.has(w)) return
       setupOnce.current.add(w)
 
+      let latestIntendedUrl: string | null = null
+
       const updUrlFromNav = (_e: any, url: string) => {
         invalidateSimplifyLatestRef.current(id)
         
         const effectiveUrl = url || 'about:blank'
+        const currentReactUrl = tabsRef.current.find((t) => t.id === id)?.url
+
+        // Ignore delayed about:blank commits if we've already instructed the tab to go elsewhere
+        if (effectiveUrl === 'about:blank' && latestIntendedUrl && latestIntendedUrl !== 'about:blank') {
+          return
+        }
+        
         let favicon = ''
         if (effectiveUrl !== 'about:blank') {
           try {
@@ -379,7 +388,13 @@ export function App() {
           setTabs(prev => prev.map(t => t.id === tid ? { ...t, title: currentTitle } : t))
         }
 
-        const pageUrl = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
+        let pageUrl = 'about:blank'
+        try {
+          pageUrl = w.getURL() || 'about:blank'
+        } catch {
+          pageUrl = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
+        }
+        
         if (pageUrl && !pageUrl.startsWith('about:')) {
           setContextLoading(p => ({ ...p, [tid]: true }))
           const hist = historyMapRef.current[tid] || []
@@ -399,11 +414,14 @@ export function App() {
         runFocusAutoSimplifyRef.current(tid, pageUrl)
       }
 
+      w.addEventListener('did-start-navigation', ((e: any) => {
+        if (e.isMainFrame) {
+          latestIntendedUrl = e.url
+        }
+      }) as any)
+      
       w.addEventListener('did-navigate', updUrlFromNav as any)
       w.addEventListener('did-navigate-in-page', updUrlFromNav as any)
-      w.addEventListener('load-commit', ((e: any) => {
-        if (e.isMainFrame) updUrlFromNav(e, e.url)
-      }) as any)
       w.addEventListener('did-finish-load', onLoad)
       w.addEventListener('page-title-updated', onTitle as any)
       w.addEventListener('page-favicon-updated', onFavicon as any)
