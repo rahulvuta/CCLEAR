@@ -36,11 +36,8 @@ export function getInjectReadingAssistScript(): string {
       display: none !important;
     }
 
-    /* ── Reading assist baseline (article pages only, not search) ── */
-    html.${RA}.${FOCUS_MODE_CLASS}:not([data-cclear-is-search="true"]) article > *,
-    html.${RA}.${FOCUS_MODE_CLASS}:not([data-cclear-is-search="true"]) [role="article"] > * {
-      max-width: 72ch;
-    }
+    /* ── Reading assist baseline ── */
+    /* Removed aggressive max-width that was breaking layouts on complex sites */
 
     /* ── Simplified text — stays inline, keeps site theme ── */
     [data-cclear-simplified="true"] {
