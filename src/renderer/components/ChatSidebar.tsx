@@ -19,14 +19,7 @@ export function ChatSidebar(props: Props) {
       <div className="chatHead">
         <div className="chatTitle">CCLEAR</div>
         <div className="chatSubtitle">Focus assistant</div>
-        <div className="chatSubtitle">
-          Powered by local Ollama (<code>{'mistral:7b'}</code>). {aiHint ?? ''}
-        </div>
-        <div className="chatSubtitle" style={{ marginTop: 8 }}>
-          Status: {aiHealthy === null && 'Checking'}
-          {aiHealthy === true && 'Ollama reachable'}
-          {aiHealthy === false && 'Ollama not reachable'}
-        </div>
+
         <div style={{ marginTop: 10 }}>
           <div className="quickRow">
             <button type="button" className="pill" onClick={() => onSend('Summarize the active tab for me in 5 bullets.')}>
