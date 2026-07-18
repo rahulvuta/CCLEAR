@@ -43,7 +43,7 @@ export function getInjectReadingAssistScript(): string {
     [data-cclear-simplified="true"] {
       border-left: 3px solid currentColor !important;
       padding-left: 10px !important;
-      color: inherit !important;
+      color: var(--cclear-text-color, inherit) !important;
       opacity: 0.95;
       position: relative;
     }
@@ -61,18 +61,6 @@ export function getInjectReadingAssistScript(): string {
     /* ── Color contrast fallback ── */
     [data-cclear-simplified] {
       font-weight: 500;
-    }
-    @media (prefers-color-scheme: dark) {
-      [data-cclear-simplified="inline"], [data-cclear-simplified="true"] {
-        color: #f7f6f3 !important;
-        text-shadow: 0 0 2px rgba(0,0,0,0.6);
-      }
-    }
-    @media (prefers-color-scheme: light) {
-      [data-cclear-simplified="inline"], [data-cclear-simplified="true"] {
-        color: #323533 !important;
-        text-shadow: 0 0 2px rgba(255,255,255,0.8);
-      }
     }
 
     .cclear-look-for {
@@ -130,17 +118,12 @@ export function getInjectReadingAssistScript(): string {
 
     /* ── Highlighted key info ── */
     mark.cclear-highlight {
-      background: rgba(250, 204, 21, 0.5) !important;
+      background: rgba(250, 204, 21, 0.35) !important;
       color: inherit !important;
       padding: 1px 3px;
       border-radius: 3px;
       font-weight: 600;
       box-decoration-break: clone;
-    }
-    @media (prefers-color-scheme: dark) {
-      mark.cclear-highlight {
-        background: rgba(250, 204, 21, 0.25) !important;
-      }
     }
   `.replace(/\s+/g, ' ')
   return `(() => {
