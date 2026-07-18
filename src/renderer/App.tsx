@@ -197,8 +197,10 @@ export function App() {
 
     const cached = simplifyApplyCacheRef.current.get(cacheKey)
     if (cached && cached.length > 0) {
-      await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)
-      return
+      const appliedCount = (await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)) as number
+      if (appliedCount > 0) {
+        return
+      }
     }
 
     const tryExtract = async () =>
@@ -633,13 +635,13 @@ export function App() {
           try { w?.reloadIgnoringCache() } catch {}
           break
         case 'zoom-in':
-          if (w) w.setZoomFactor(Math.min(w.getZoomFactor() + 0.1, 3.0))
+          try { if (w) w.setZoomFactor(Math.min(w.getZoomFactor() + 0.1, 3.0)) } catch {}
           break
         case 'zoom-out':
-          if (w) w.setZoomFactor(Math.max(w.getZoomFactor() - 0.1, 0.25))
+          try { if (w) w.setZoomFactor(Math.max(w.getZoomFactor() - 0.1, 0.25)) } catch {}
           break
         case 'zoom-reset':
-          if (w) w.setZoomFactor(1.0)
+          try { if (w) w.setZoomFactor(1.0) } catch {}
           break
         case 'toggle-focus':
           setFocusModeEnabled(!focusModeEnabledRef.current)
