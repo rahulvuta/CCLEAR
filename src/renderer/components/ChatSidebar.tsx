@@ -47,6 +47,13 @@ export function ChatSidebar(props: Props) {
             {m.content}
           </div>
         ))}
+        {sending && (
+          <div className="bubble bubbleAsst loadingBubble">
+            <span className="dot"></span>
+            <span className="dot"></span>
+            <span className="dot"></span>
+          </div>
+        )}
       </div>
       <div className="chatInputRow">
         <textarea
@@ -59,10 +66,19 @@ export function ChatSidebar(props: Props) {
               onSend()
             }
           }}
-          placeholder="Message"
+          placeholder="Message Focus..."
         />
-        <button type="button" className="sendBtn" disabled={sending || input.trim().length === 0} onClick={() => onSend()}>
-          Send
+        <button 
+          type="button" 
+          className="sendBtn" 
+          disabled={sending || input.trim().length === 0} 
+          onClick={() => onSend()}
+          title="Send message"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
         </button>
       </div>
     </div>

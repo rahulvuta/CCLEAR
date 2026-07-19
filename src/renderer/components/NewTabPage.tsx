@@ -52,7 +52,7 @@ export function NewTabPage({ onNavigate, recentHistory }: Props) {
     if (q.includes('.') && !q.includes(' ')) {
       onNavigate(q.startsWith('http') ? q : `https://${q}`)
     } else {
-      onNavigate(`https://duckduckgo.com/?q=${encodeURIComponent(q)}`)
+      onNavigate(`https://www.google.com/search?q=${encodeURIComponent(q)}`)
     }
   }
 
