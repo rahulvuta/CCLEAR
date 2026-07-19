@@ -11,8 +11,9 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
     chat: (
       messages: ChatMessage[],
       tabs: TabContextItem[],
-      activeTabId?: string
-    ): Promise<string> => ipcRenderer.invoke('ai:chat', { messages, tabs, activeTabId }),
+      activeTabId?: string,
+      screenText?: string
+    ): Promise<string> => ipcRenderer.invoke('ai:chat', { messages, tabs, activeTabId, screenText }),
     simplifyChunks: (chunks: SimplifyChunk[]): Promise<{ id: string; summary: string; keyPoints: string[] }[]> =>
       ipcRenderer.invoke('ai:simplify-chunks', chunks),
     groupTabs: (tabs: TabContextItem[]): Promise<TabGroupAssignment[]> => ipcRenderer.invoke('ai:group-tabs', tabs),
