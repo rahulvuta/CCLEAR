@@ -477,22 +477,23 @@ input.switch:active {
 }
 
 .chatHead {
-  padding: 14px;
+  padding: 20px;
   border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
 }
 
 .chatTitle {
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  font-size: 12px;
-  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  font-size: 14px;
+  color: var(--accent);
 }
 
 .chatSubtitle {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  margin-top: 4px;
-  line-height: 1.4;
+  margin-top: 2px;
+  font-weight: 500;
 }
 
 .chatBody {
@@ -505,29 +506,54 @@ input.switch:active {
 }
 
 .bubble {
-  border: 1px solid var(--border);
+  border: none;
   background: var(--surface-2);
-  border-radius: 16px;
-  padding: 12px 16px;
+  border-radius: 18px;
+  padding: 12px 18px;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
-  max-width: 90%;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  max-width: 88%;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.02);
 }
 
 .bubbleUser {
   align-self: flex-end;
   background: var(--accent);
   color: #fff;
-  border-color: var(--accent);
   border-bottom-right-radius: 4px;
+  box-shadow: 0 2px 8px rgba(90, 130, 160, 0.2);
 }
 
 .bubbleAsst {
   align-self: flex-start;
-  background: var(--surface-2);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
+}
+
+/* Loading Bubble Animation */
+.loadingBubble {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 18px;
+}
+
+.loadingBubble .dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--muted);
+  border-radius: 50%;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.loadingBubble .dot:nth-child(1) { animation-delay: -0.32s; }
+.loadingBubble .dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
 }
 
 .quickRow {
@@ -559,59 +585,68 @@ input.switch:active {
 }
 
 .chatInputRow {
-  padding: 12px;
-  border-top: 1px solid var(--border);
+  padding: 16px;
+  border-top: 1px solid var(--surface-2);
   display: flex;
-  gap: 8px;
+  gap: 12px;
+  align-items: flex-end;
+  background: var(--surface-0);
 }
 
 .chatTextarea {
   flex: 1;
-  min-height: 44px;
+  min-height: 48px;
   max-height: 120px;
   resize: vertical;
-  border-radius: 20px;
+  border-radius: 24px;
   border: 1px solid var(--border);
-  background: var(--surface-0);
+  background: var(--surface-1);
   color: var(--text);
-  padding: 12px 16px;
+  padding: 14px 20px;
   font-family: inherit;
   font-size: 14px;
   line-height: 1.4;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.2s ease;
 }
 
 .chatTextarea:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(90, 130, 160, 0.15);
+  background: var(--surface-2);
 }
 
 .sendBtn {
-  width: 72px;
-  border-radius: 20px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
   border: none;
   background: var(--accent);
   color: #fff;
   cursor: pointer;
-  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.sendBtn:hover {
-  background: var(--accent-strong);
-  transform: translateY(-1px);
-}
-
-.sendBtn:active {
-  transform: translateY(1px) scale(0.95);
+  margin-bottom: 1px;
 }
 
 .sendBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
+  transform: scale(0.95);
 }
+
+.sendBtn:not(:disabled):hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(90, 130, 160, 0.3);
+}
+
+.sendBtn svg {
+  margin-right: 2px;
+  margin-top: 2px;
+}
+
 
 .emptyHint {
   font-size: 13px;
@@ -649,24 +684,25 @@ input.switch:active {
 
 /* Why Am I Here Box */
 .whyBoxContainer {
-  height: 25%;
-  min-height: 120px;
+  height: auto;
+  max-height: 30%;
+  min-height: 100px;
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   background: var(--surface-1);
 }
 .whyBoxTitle {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  color: var(--muted);
-  padding: 12px 16px 8px;
+  color: var(--accent);
+  padding: 16px 20px 8px;
   margin: 0;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.08em;
 }
 .whyBoxContent {
-  padding: 0 16px 12px;
+  padding: 0 20px 16px;
   font-size: 13px;
   color: var(--text);
   flex: 1;
@@ -676,16 +712,24 @@ input.switch:active {
 .whyBoxEmpty, .whyBoxLoading {
   color: var(--muted);
   font-style: italic;
+  opacity: 0.8;
 }
 .whyBoxItem {
   margin-bottom: 12px;
-  border-bottom: 1px solid var(--surface-2);
-  padding-bottom: 8px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
 }
 .whyBoxItem:last-child {
-  border-bottom: none;
   margin-bottom: 0;
-  padding-bottom: 0;
+}
+.whyBoxItem:hover {
+  background: var(--surface-0);
+  border-color: var(--border);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
 .whyBoxRow {
   margin-bottom: 6px;
@@ -693,17 +737,18 @@ input.switch:active {
 }
 .whyBoxRow strong {
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
 }
 .whyBoxInlineSummary {
-  margin-top: 6px;
-  padding: 8px;
-  background: var(--surface-2);
-  border-radius: 6px;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--surface-0);
+  border-radius: 8px;
   font-size: 12px;
   color: var(--text);
-  border-left: 2px solid var(--accent);
+  border-left: 3px solid var(--accent);
   animation: slideDown 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.02);
 }
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px) scale(0.98); }
