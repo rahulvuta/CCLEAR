@@ -26,6 +26,12 @@ function buildAppMenu() {
             submenu: [
               { role: 'about' as const },
               { type: 'separator' as const },
+              {
+                label: 'Settings',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => sendToRenderer('shortcut', 'open-settings')
+              },
+              { type: 'separator' as const },
               { role: 'hide' as const },
               { role: 'hideOthers' as const },
               { role: 'unhide' as const },
@@ -62,7 +68,23 @@ function buildAppMenu() {
           click: () => sendToRenderer('shortcut', 'focus-address')
         },
         { type: 'separator' },
-        ...(isMac ? [] : [{ role: 'quit' as const }])
+        {
+          label: 'Print',
+          accelerator: 'CmdOrCtrl+P',
+          click: () => sendToRenderer('shortcut', 'print')
+        },
+        ...(!isMac
+          ? [
+              { type: 'separator' as const },
+              {
+                label: 'Settings',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => sendToRenderer('shortcut', 'open-settings')
+              },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          : [])
       ]
     },
 
@@ -146,6 +168,11 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+]',
           click: () => sendToRenderer('shortcut', 'go-forward')
         },
+        {
+          label: 'Home',
+          accelerator: 'Alt+Home',
+          click: () => sendToRenderer('shortcut', 'go-home')
+        },
         { type: 'separator' },
         {
           label: 'Next Tab',
@@ -206,6 +233,53 @@ function buildAppMenu() {
       ]
     },
 
+    {
+      label: 'Bookmarks',
+      submenu: [
+        {
+          label: 'Bookmark This Page',
+          accelerator: 'CmdOrCtrl+D',
+          click: () => sendToRenderer('shortcut', 'bookmark-page')
+        },
+        {
+          label: 'Show Bookmarks Bar',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => sendToRenderer('shortcut', 'toggle-bookmarks-bar')
+        },
+        {
+          label: 'Bookmark Manager',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: () => sendToRenderer('shortcut', 'open-bookmarks')
+        }
+      ]
+    },
+
+    {
+      label: 'History',
+      submenu: [
+        {
+          label: 'Show Full History',
+          accelerator: 'CmdOrCtrl+Y',
+          click: () => sendToRenderer('shortcut', 'open-history')
+        },
+        {
+          label: 'Reopen Closed Tab',
+          click: () => sendToRenderer('shortcut', 'reopen-tab')
+        }
+      ]
+    },
+
+    {
+      label: 'Downloads',
+      submenu: [
+        {
+          label: 'Downloads',
+          accelerator: 'CmdOrCtrl+Shift+J',
+          click: () => sendToRenderer('shortcut', 'open-downloads')
+        }
+      ]
+    },
+
     // Window
     {
       label: 'Window',
@@ -241,12 +315,19 @@ function resolveRendererUrl() {
 }
 
 async function createWindow() {
+  const isMac = process.platform === 'darwin'
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 620,
     title: 'CCLEAR',
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 16, y: 14 }
+        }
+      : {}),
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
