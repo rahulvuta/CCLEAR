@@ -2,7 +2,10 @@ import Store from 'electron-store'
 import type { Prefs } from '../../src/shared/types'
 
 const defaults: Prefs = {
-  focusModeEnabled: false
+  focusModeEnabled: false,
+  showBookmarksBar: true,
+  restoreTabsOnStartup: true,
+  homepage: 'about:blank'
 }
 
 const store = new Store<{ prefs: Prefs }>({
