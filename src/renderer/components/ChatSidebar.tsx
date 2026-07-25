@@ -17,8 +17,8 @@ export function ChatSidebar(props: Props) {
   return (
     <div className="chat">
       <div className="chatHead">
-        <div className="chatTitle">CCLEAR</div>
-        <div className="chatSubtitle">Focus assistant</div>
+        <div className="chatTitle">Assistant</div>
+        <div className="chatSubtitle">Local focus helper</div>
 
         <div style={{ marginTop: 10 }}>
           <div className="quickRow">
