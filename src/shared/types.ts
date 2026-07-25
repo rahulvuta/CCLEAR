@@ -23,6 +23,14 @@ export type PageBlockForSimplify = {
   tagName: string
 }
 
+export type SimplifyResult = {
+  id: string
+  status?: 'simplified' | 'preserved'
+  summary: string
+  highlightPhrases: string[]
+  termEmphasis: string[]
+}
+
 export type TabGroupAssignment = {
   id: string
   group: string
@@ -36,69 +44,4 @@ export type TabContextSummary = {
 
 export type Prefs = {
   focusModeEnabled: boolean
-  showBookmarksBar: boolean
-  restoreTabsOnStartup: boolean
-  homepage: string
-}
-
-export type BookmarkItem = {
-  id: string
-  type: 'folder' | 'url'
-  title: string
-  url?: string
-  parentId: string | null
-  order: number
-  createdAt: number
-}
-
-export type HistoryEntry = {
-  id: string
-  url: string
-  title: string
-  visitedAt: number
-  favicon?: string
-}
-
-export type DownloadRecord = {
-  id: string
-  filename: string
-  url: string
-  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
-  receivedBytes: number
-  totalBytes: number
-  savePath: string
-  startedAt: number
-}
-
-export type SessionTab = {
-  id: string
-  url: string
-  title: string
-  pinned?: boolean
-  muted?: boolean
-}
-
-export type BrowserSession = {
-  tabs: SessionTab[]
-  activeId: string
-  closed: SessionTab[]
-}
-
-export type BookmarkWrite = {
-  type?: 'folder' | 'url'
-  title: string
-  url?: string
-  parentId?: string | null
-}
-
-export type SimplifyEmphasis = {
-  keyPhrases: string[]
-  boldTerms: string[]
-}
-
-export type SimplifyResult = {
-  id: string
-  summary: string
-  keyPhrases: string[]
-  boldTerms: string[]
 }
