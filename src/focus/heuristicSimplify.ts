@@ -1,434 +1,538 @@
 import type { SimplifyChunk, SimplifyResult } from '../shared/types'
+import { isProseBlock, shouldSkipChromeText } from './blockFilters'
 
-/** Default cap when source is short */
-export const MAX_SUMMARY_WORDS = 22
-export const MAX_KEY_PHRASES = 2
-export const MAX_BOLD_TERMS = 4
+export const MAX_SUMMARY_WORDS = 40
+export const MIN_KEEP_WORDS = 12
+export const MAX_HIGHLIGHT_PHRASES = 2
+export const MAX_TERM_EMPHASIS = 2
 
-const FILLER_RE = [
-  /\bit is important to note that\b/gi,
-  /\bit should be noted that\b/gi,
-  /\bin order to\b/gi,
-  /\bdue to the fact that\b/gi,
-  /\bfor the most part\b/gi,
-  /\bat the end of the day\b/gi,
-  /\bas a matter of fact\b/gi,
-  /\bneedless to say\b/gi,
-  /\bthe fact that\b/gi
-]
+const STOP = new Set(
+  'a an the and or but if of to in on for with from as at by is are was were be been being this that these those it its'.split(
+    ' '
+  )
+)
+
+const NEG_RE = /\b(not|never|no|neither|nor|without|cannot|can't|don't|doesn't|didn't|isn't|aren't|wasn't|weren't|won't|wouldn't)\b/i
+
+/** Reason / mechanism / outcome — must survive a shorten. */
+export const CAUSE_RE =
+  /\b(because|therefore|thus|hence|due to|so that|which means|as a result|that's why|that is why|this is why|why)\b/i
+
+const FILLER_RE = /^(?:if you visited\b|.*\btravel aside)/i
+
+const COMPARE_RE = /\b(shorter|longer|more|less|fewer) than\b/i
+const OUTCOME_RE = /\bseparated into\b/i
+const HARD_SUFFIX_RE = /(?:ology|osis|ometer|imetry|ograph|ography)$/i
+const COMMON_TION = new Set(
+  'information education nation action question section condition position attention relation direction collection production protection'.split(
+    ' '
+  )
+)
+
+export type EmphasisFields = {
+  summary: string
+  highlightPhrases: string[]
+  termEmphasis: string[]
+}
 
 export function clampSummaryWords(summary: string, maxWords = MAX_SUMMARY_WORDS): string {
-  const t = summary.trim().replace(/\s+/g, ' ')
-  if (!t) return ''
-  const words = t.split(/\s+/)
-  if (words.length <= maxWords) return t
-  return words.slice(0, maxWords).join(' ') + '…'
+  return clipAtBoundary(summary, maxWords)
 }
 
-function normalizeSpanText(text: string): string {
+/** Scale with the block; a fixed cap loses most of a long paragraph. */
+export function targetWordBudget(sourceWords: number): number {
+  if (sourceWords <= MIN_KEEP_WORDS) return sourceWords
+  return Math.round(sourceWords * 0.62)
+}
+
+export function summaryWordRange(text: string): { min: number; max: number; target: number } {
+  const n = wordCount(stripWikiCites(text))
+  if (n <= MIN_KEEP_WORDS) return { min: n, max: n, target: n }
+  return { min: Math.ceil(n * 0.5), max: Math.floor(n * 0.75), target: targetWordBudget(n) }
+}
+
+/** Drop Wikipedia-style [16] markers; they are not part of the claim. */
+export function stripWikiCites(text: string): string {
   return text
-    .trim()
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\[\s*\d+\s*\]/g, '')
+    .replace(/\[(?:citation needed|note \d+)\]/gi, '')
     .replace(/\s+/g, ' ')
-    .replace(/[.,;:!?]+$/g, '')
+    .trim()
 }
 
-export function alignSpansToSummary(summary: string, spans: string[], max: number): string[] {
-  const out: string[] = []
-  const normSummary = normalizeSpanText(summary)
-  const low = normSummary.toLowerCase()
-  for (const span of spans) {
-    const k = normalizeSpanText(String(span))
-    if (!k || k.length < 2) continue
-    if (low.includes(k.toLowerCase())) {
-      const pos = low.indexOf(k.toLowerCase())
-      out.push(summary.slice(pos, pos + k.length))
-      continue
-    }
-    const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    try {
-      const re = new RegExp(esc.replace(/\\ /g, '\\s+'), 'i')
-      const m = summary.match(re)
-      if (m) out.push(m[0])
-    } catch {
-      //
-    }
-    if (out.length >= max) break
-  }
-  return out.slice(0, max)
-}
-
-function dynamicWordCap(sourceWordCount: number): number {
-  if (sourceWordCount <= 30) return Math.min(MAX_SUMMARY_WORDS, sourceWordCount)
-  if (sourceWordCount > 40) return Math.max(22, Math.min(40, Math.floor(sourceWordCount * 0.65)))
-  return Math.max(12, Math.floor(sourceWordCount * 0.55))
-}
-
-const GENERIC_PHRASE_START = /^(the|our|this|it|a|an)\s+[a-z]/i
-
-function isMeaningfulPhrase(phrase: string): boolean {
-  const p = phrase.trim()
-  if (!p) return false
-  if (/\d/.test(p)) return true
-  const words = p.split(/\s+/).filter(Boolean)
-  const hasProper = words.some((w) => /^[A-Z][a-z]{2,}/.test(w.replace(/[^a-zA-Z]/g, '')))
-  if (hasProper) return true
-  if (GENERIC_PHRASE_START.test(p)) return false
-  return words.length >= 2
-}
-
-function stripFiller(text: string): string {
-  let t = text
-  for (const re of FILLER_RE) {
-    t = t.replace(re, '')
-  }
-  t = t.replace(/\([^)]{4,120}\)/g, ' ')
-  return t.replace(/\s+/g, ' ').trim()
-}
-
-function plainLanguageRewrite(text: string): string {
-  const t = stripFiller(text.trim().replace(/\s+/g, ' '))
+/**
+ * Keep only whole sentences when enforcing a word budget. If the first sentence
+ * is too long, return the input unchanged: a long sentence is safer than a
+ * shorter fragment whose grammar or meaning has been damaged.
+ */
+export function clipAtBoundary(text: string, maxWords = MAX_SUMMARY_WORDS): string {
+  const t = text.trim().replace(/\s+/g, ' ')
   if (!t) return ''
+  const words = t.split(/\s+/).filter(Boolean)
+  if (words.length <= maxWords) return t
 
-  const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean)
-  const wordTotal = t.split(/\s+/).filter(Boolean).length
-  const take = wordTotal > 50 ? Math.min(3, sentences.length) : Math.min(2, sentences.length)
-  const lead = sentences.slice(0, take).join(' ')
-  return lead || t
+  const kept: string[] = []
+  let used = 0
+  for (const sentence of splitSentences(t)) {
+    const sentenceWords = wordCount(sentence)
+    if (used + sentenceWords > maxWords) break
+    kept.push(sentence)
+    used += sentenceWords
+  }
+  return kept.length > 0 ? kept.join(' ') : t
 }
 
-function wordCount(s: string): number {
-  return s.split(/\s+/).filter(Boolean).length
+export function yearsIn(text: string): string[] {
+  return text.match(/\b(?:19|20)\d{2}\b/g) ?? []
 }
 
-function overlapsRange(
-  ranges: Array<{ start: number; end: number }>,
-  start: number,
-  end: number
-): boolean {
-  return ranges.some((r) => start < r.end && end > r.start)
+export function urlsIn(text: string): string[] {
+  return text.match(/https?:\/\/\S+/gi) ?? []
 }
 
-function findPhrasePositions(summary: string, phrase: string): number[] {
-  const positions: number[] = []
-  const low = summary.toLowerCase()
-  const pl = phrase.toLowerCase()
-  let idx = 0
-  while (idx < summary.length) {
-    const pos = low.indexOf(pl, idx)
-    if (pos < 0) break
-    positions.push(pos)
-    idx = pos + 1
-  }
-  return positions
+export function dropsNegation(source: string, summary: string): boolean {
+  if (!NEG_RE.test(source)) return false
+  return !NEG_RE.test(summary)
 }
 
-function pickKeyPhrases(summary: string, original: string, n: number, strict = true): string[] {
-  const found: string[] = []
-  const seen = new Set<string>()
-  const ranges: Array<{ start: number; end: number }> = []
-
-  const tryAdd = (phrase: string, skipMeaningful = false) => {
-    const p = phrase.trim().replace(/\s+/g, ' ')
-    const wc = wordCount(p)
-    if (wc < 2 || wc > 7 || seen.has(p.toLowerCase())) return
-    if (strict && !skipMeaningful && !isMeaningfulPhrase(p)) return
-    if (!summary.toLowerCase().includes(p.toLowerCase())) return
-
-    const positions = findPhrasePositions(summary, p)
-    for (const pos of positions) {
-      const end = pos + p.length
-      if (!overlapsRange(ranges, pos, end)) {
-        seen.add(p.toLowerCase())
-        ranges.push({ start: pos, end })
-        found.push(summary.slice(pos, end))
-        return
-      }
-    }
-  }
-
-  const origWords = original.split(/\s+/).filter(Boolean)
-  for (let len = 7; len >= 2; len--) {
-    for (let i = 0; i <= origWords.length - len; i++) {
-      const span = origWords.slice(i, i + len).join(' ')
-      if (summary.toLowerCase().includes(span.toLowerCase())) {
-        tryAdd(span.replace(/[.,;:!?]+$/g, ''))
-        if (found.length >= n) return found.slice(0, n)
-      }
-    }
-  }
-
-  const defPatterns = original.match(
-    /\b(?:called|known as|means|is a|is the|refers to)\s+[^.!?]{2,50}/gi
-  )
-  if (defPatterns) {
-    for (const d of defPatterns) {
-      const clause = d.replace(/^(called|known as|means|is a|is the|refers to)\s+/i, '').trim()
-      if (clause) tryAdd(clause.replace(/[.,;:!?]+$/g, ''))
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const capTerms = original.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/g)
-  if (capTerms) {
-    for (const t of capTerms) {
-      if (summary.toLowerCase().includes(t.toLowerCase())) tryAdd(t)
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const contextual = original.match(
-    /\b(?:\$[\d,]+(?:\.\d+)?[kKmMbB]?|\d+(?:\.\d+)?%|\b(?:19|20)\d{2}\b)[^.!?]{0,40}/g
-  )
-  if (contextual) {
-    for (const c of contextual) {
-      tryAdd(c.trim().replace(/[.,;:!?]+$/g, ''))
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const withUnits = original.match(
-    /\b\d[\d,.]*\s*(?:million|billion|trillion|miles?|km|light-years?|years?|%)\b[^.!?]{0,30}/gi
-  )
-  if (withUnits) {
-    for (const c of withUnits) {
-      tryAdd(c.trim().replace(/[.,;:!?]+$/g, ''))
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const words = summary.split(/\s+/).filter(Boolean)
-  for (let len = 4; len >= 2; len--) {
-    for (let i = 0; i <= words.length - len; i++) {
-      const span = words.slice(i, i + len).join(' ')
-      tryAdd(span.replace(/[.,;:!?]+$/g, ''))
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  return found.slice(0, n)
+export function dropsCause(source: string, summary: string): boolean {
+  if (!CAUSE_RE.test(source)) return false
+  return !CAUSE_RE.test(summary)
 }
 
-function isInsidePhrase(
-  pos: number,
-  len: number,
-  phrases: string[],
-  summary: string
-): boolean {
-  const low = summary.toLowerCase()
-  for (const p of phrases) {
-    let idx = 0
-    while (idx < summary.length) {
-      const start = low.indexOf(p.toLowerCase(), idx)
-      if (start < 0) break
-      const end = start + p.length
-      if (pos >= start && pos + len <= end) return true
-      idx = start + 1
-    }
+export function introducesForeignMetadata(source: string, summary: string): boolean {
+  const src = source.toLowerCase()
+  for (const u of urlsIn(summary)) {
+    if (!source.toLowerCase().includes(u.toLowerCase())) return true
+  }
+  if (urlsIn(summary).length && !urlsIn(source).length) return true
+  for (const y of yearsIn(summary)) {
+    if (!src.includes(y)) return true
+  }
+  const hosts = summary.match(/\b[\w.-]+\.(com|org|gov|edu|net|io)\b/gi) ?? []
+  for (const h of hosts) {
+    if (!src.includes(h.toLowerCase())) return true
   }
   return false
 }
 
-const STOP_BOLD_TERMS = new Set([
-  'which', 'that', 'this', 'with', 'from', 'their', 'there', 'when', 'where',
-  'what', 'have', 'been', 'were', 'will', 'would', 'could', 'should', 'also',
-  'than', 'then', 'into', 'over', 'under', 'after', 'before', 'about'
-])
+function numericDetailsIn(text: string): string[] {
+  return text.match(/(?:[$£€]\s*)?\b\d+(?:[.,]\d+)*(?:st|nd|rd|th|s|%)?/g) ?? []
+}
 
-function pickBoldTerms(
-  summary: string,
-  original: string,
-  keyPhrases: string[],
-  n: number
-): string[] {
-  const found: string[] = []
+/** Explicit quantities are meaning-bearing and must not disappear. */
+export function dropsNumericDetails(source: string, summary: string): boolean {
+  const summaryNumbers = new Set(numericDetailsIn(summary).map((n) => n.toLowerCase()))
+  return numericDetailsIn(source).some((n) => !summaryNumbers.has(n.toLowerCase()))
+}
+
+function contentTokens(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9']+/)
+      .filter((w) => w.length > 2 && !STOP.has(w))
+  )
+}
+
+/** True when the summary does not invent content-bearing tokens. */
+export function summaryCoveredBySource(source: string, summary: string): boolean {
+  const src = contentTokens(source)
+  if (src.size === 0) return summary.trim().length === 0
+  for (const tok of contentTokens(summary)) {
+    if (!src.has(tok)) return false
+  }
+  return true
+}
+
+const TRAILING_FRAGMENT_RE =
+  /\b(?:a|an|the|and|or|but|if|because|although|though|while|when|unless|until|from|to|of|in|on|at|by|for|with|without|is|are|was|were|be|been|being|am|do|does|did|have|has|had|can|could|may|might|must|shall|should|will|would|you(?:'re|\u2019re)|we(?:'re|\u2019re)|they(?:'re|\u2019re))\s*[.!?]?$/i
+
+const LEADING_DEPENDENT_RE =
+  /^(?:if|when|while|because|although|though|unless|until|before|after|from)\b/i
+
+/** A simplified block must read as standalone prose, not as a clipped clause. */
+export function isCompleteSummary(summary: string): boolean {
+  const s = summary.trim().replace(/\s+/g, ' ')
+  if (!s || !/[.!?][\s\])}"'\u2019\u201d]*$/.test(s)) return false
+  if (TRAILING_FRAGMENT_RE.test(s)) return false
+
+  let parens = 0
+  for (const ch of s) {
+    if (ch === '(') parens += 1
+    if (ch === ')') parens -= 1
+    if (parens < 0) return false
+  }
+  if (parens !== 0) return false
+
+  for (const sentence of splitSentences(s)) {
+    if (/^(?:and|or|but)\b/i.test(sentence)) return false
+    // A leading dependent phrase needs a comma followed by an independent clause.
+    if (LEADING_DEPENDENT_RE.test(sentence) && !sentence.includes(',')) return false
+  }
+  return true
+}
+
+function normalizedSentence(sentence: string): string {
+  return sentence
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Accept only complete source sentences in their original order. A bag-of-words
+ * check cannot catch role reversals ("cats chase dogs" vs "dogs chase cats") or
+ * modifier-scope changes, while extractive selection preserves both.
+ */
+export function isOrderedSentenceSelection(source: string, summary: string): boolean {
+  const sourceSentences = splitSentences(stripWikiCites(source)).map(normalizedSentence)
+  const summarySentences = splitSentences(stripWikiCites(summary)).map(normalizedSentence)
+  if (summarySentences.length === 0) return false
+
+  let sourceIndex = 0
+  for (const sentence of summarySentences) {
+    const found = sourceSentences.indexOf(sentence, sourceIndex)
+    if (found < 0) return false
+    sourceIndex = found + 1
+  }
+  return true
+}
+
+export function isFaithfulSummary(source: string, summary: string): boolean {
+  const s = summary.trim()
+  if (!s) return false
+  const normalizedSource = stripWikiCites(source).replace(/\s+/g, ' ').trim()
+  if (s.replace(/\s+/g, ' ') === normalizedSource) return true
+  if (!isCompleteSummary(s)) return false
+  if (dropsNegation(source, s)) return false
+  if (dropsCause(source, s)) return false
+  if (dropsNumericDetails(source, s)) return false
+  if (introducesForeignMetadata(source, s)) return false
+  if (!summaryCoveredBySource(source, s)) return false
+  if (!isOrderedSentenceSelection(source, s)) return false
+  const kept = splitSentences(s).map(normalizedSentence)
+  return splitSentences(normalizedSource).every((sentence) =>
+    isFillerSentence(sentence) || kept.includes(normalizedSentence(sentence)))
+}
+
+function phraseWordCount(p: string): number {
+  return p.trim().split(/\s+/).filter(Boolean).length
+}
+
+function splitSentences(text: string): string[] {
+  const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' })
+  return Array.from(segmenter.segment(text), (s) => s.segment.trim()).filter(Boolean)
+}
+
+export function wordCount(s: string): number {
+  return s.split(/\s+/).filter(Boolean).length
+}
+
+function isFillerSentence(s: string): boolean {
+  return FILLER_RE.test(s) && !CAUSE_RE.test(s) && !NEG_RE.test(s) && !numericDetailsIn(s).length
+}
+
+/**
+ * Offline fallback: remove explicit asides only. Sentence scoring cannot tell
+ * whether a low-scoring sentence defines the topic or explains its mechanism.
+ * Rewriting to the requested budget requires the model and its quality check.
+ */
+export function extractiveCompress(text: string): string {
+  const t = stripWikiCites(text)
+  const sentences = splitSentences(t)
+  return sentences.filter((s) => !isFillerSentence(s)).join(' ') || t
+}
+
+const NOT_TERM = new Set(
+  'when white light other some like just made used also into over only even still much many more most such each both same very through around about after before between every another using based called shines shine travels learned visited passing ocean lazy short long kinds tiny universe windows land magic energy waves wave colors color because therefore specially shaped crystal having being doing going could would should there their them then than what which while where france britain england english america american china india london paris germany german spain spanish italy italian russia russian canada canadian australia australian japan japanese'.split(
+    ' '
+  )
+)
+
+const HANGING = new Set(
+  'a an the and or but if of to in on for with from as at by is are was were be been via both which than usual old north'.split(
+    ' '
+  )
+)
+
+export function isCompletePhrase(p: string, maxWords = 6): boolean {
+  const k = p.trim().replace(/\s+/g, ' ')
+  const words = k.split(/\s+/).filter(Boolean)
+  if (words.length < 2 || words.length > maxWords) return false
+  const first = stripTrailPunct(words[0]).toLowerCase()
+  const last = stripTrailPunct(words[words.length - 1]).toLowerCase()
+  if (HANGING.has(last)) return false
+  if (HANGING.has(first) && first !== 'because' && first !== 'therefore') return false
+  if (/^(via|from|the|and|or)$/i.test(first)) return false
+  if (/[("']$/.test(k)) return false
+  if (/^\(/.test(k) && !k.includes(')')) return false
+  if (/"[^"]*$/.test(k) && (k.match(/"/g) || []).length % 2 === 1) return false
+  return true
+}
+
+function phrasesOverlap(a: string, b: string): boolean {
+  const al = a.toLowerCase()
+  const bl = b.toLowerCase()
+  if (al.includes(bl) || bl.includes(al)) return true
+  const aw = al.split(/\s+/)
+  const bw = bl.split(/\s+/)
+  if (aw.length >= 3 && bw.length >= 3) {
+    const aCore = aw.slice(1, -1).join(' ')
+    const bCore = bw.slice(1, -1).join(' ')
+    if (aCore && bCore && (al.includes(bCore) || bl.includes(aCore))) return true
+  }
+  return false
+}
+
+function isClaimPhrase(k: string): boolean {
+  return CAUSE_RE.test(k) || COMPARE_RE.test(k) || OUTCOME_RE.test(k)
+}
+
+/** Phrase highlights: the main why / comparison / outcome only. */
+export function filterHighlightPhrases(summary: string, source: string, phrases: string[]): string[] {
+  const out: string[] = []
   const seen = new Set<string>()
-
-  const tryAdd = (term: string) => {
-    const t = term.trim().replace(/[.,;:!?]+$/g, '')
-    const wc = wordCount(t)
-    if (wc < 1 || wc > 2 || t.length < 2 || seen.has(t.toLowerCase())) return
-    if (STOP_BOLD_TERMS.has(t.toLowerCase())) return
-    if (!summary.toLowerCase().includes(t.toLowerCase())) return
-
-    const pos = summary.toLowerCase().indexOf(t.toLowerCase())
-    if (pos < 0 || isInsidePhrase(pos, t.length, keyPhrases, summary)) return
-
-    seen.add(t.toLowerCase())
-    found.push(summary.slice(pos, pos + t.length))
+  const sumLow = summary.toLowerCase()
+  const srcLow = source.toLowerCase()
+  const sumWords = phraseWordCount(summary)
+  let hasWhy = false
+  let hasOutcome = false
+  for (const raw of phrases) {
+    const k = String(raw).trim().replace(/\s+/g, ' ')
+    if (!isClaimPhrase(k)) continue
+    const allowLong = CAUSE_RE.test(k)
+    if (!isCompletePhrase(k, allowLong ? 10 : 6)) continue
+    if (phraseWordCount(k) >= Math.max(8, Math.floor(sumWords * 0.45))) continue
+    if (seen.has(k.toLowerCase())) continue
+    if (!sumLow.includes(k.toLowerCase()) || !srcLow.includes(k.toLowerCase())) continue
+    if (out.some((p) => phrasesOverlap(p, k))) continue
+    const why = CAUSE_RE.test(k)
+    const outcome = COMPARE_RE.test(k) || OUTCOME_RE.test(k)
+    if (why && hasWhy) continue
+    if (outcome && !why && hasOutcome) continue
+    if (out.length >= 1 && !(why && hasOutcome) && !(outcome && hasWhy)) continue
+    seen.add(k.toLowerCase())
+    const i = sumLow.indexOf(k.toLowerCase())
+    out.push(summary.slice(i, i + k.length))
+    if (why) hasWhy = true
+    if (outcome) hasOutcome = true
+    if (out.length >= MAX_HIGHLIGHT_PHRASES) break
   }
-
-  const signals = (original + ' ' + summary).match(
-    /\b\d+(?:\.\d+)?%|\$[\d,]+(?:\.\d+)?[kKmMbB]?|\b(?:19|20)\d{2}\b|\b\d{1,3}(?:,\d{3})+\b/g
-  )
-  if (signals) {
-    for (const s of signals) {
-      tryAdd(s)
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const units = (original + ' ' + summary).match(
-    /\b\d[\d,.]*\s*(?:million|billion|trillion|miles?|km|light-years?|years?|%)\b/gi
-  )
-  if (units) {
-    for (const u of units) {
-      tryAdd(u.trim())
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  const techTerms = (original + ' ' + summary).match(
-    /\b(?:[A-Z][a-z]+(?:\s+[a-z]+)|[a-z]+(?:\s+[a-z]+){1,2})\b/g
-  )
-  if (techTerms) {
-    for (const term of techTerms.sort((a, b) => b.length - a.length)) {
-      const t = term.trim()
-      if (t.split(/\s+/).length === 2 && original.toLowerCase().includes(t.toLowerCase())) {
-        tryAdd(t)
-      }
-      if (found.length >= n) return found.slice(0, n)
-    }
-  }
-
-  for (const w of summary.split(/\s+/)) {
-    const core = w.replace(/[^a-zA-Z0-9'-]/g, '')
-    if (/^[A-Z][a-z]{2,}/.test(core)) tryAdd(w)
-    if (found.length >= n) return found.slice(0, n)
-  }
-
-  return found.slice(0, n)
+  return out
 }
 
-function pickBestAnchorTerm(summary: string): string {
+function isDefinedIn(summary: string, term: string): boolean {
+  const t = term.replace(/[^A-Za-z0-9'-]/g, '')
+  if (!t) return false
+  const re = new RegExp(
+    `\\b(?:a|an|the)\\s+${t}\\s+is\\b|\\bcalled\\s+${t}\\b`,
+    'i'
+  )
+  return re.test(summary)
+}
+
+function isHardWord(core: string): boolean {
+  const c = core.toLowerCase()
+  if (/(?:ed|ing)$/.test(c) && c.length < 12) return false
+  if (COMMON_TION.has(c)) return false
+  if (c.length >= 10) return true
+  if (HARD_SUFFIX_RE.test(c) && c.length >= 6) return true
+  return false
+}
+
+/** Subject jargon and hard words — never country / person Title Case. */
+export function filterTermEmphasis(summary: string, source: string, terms: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const srcLow = source.toLowerCase()
+  const sumLow = summary.toLowerCase()
+  for (const raw of terms) {
+    const k = String(raw).trim()
+    if (!k || /\s/.test(k)) continue
+    const core = k.replace(/[^A-Za-z0-9'-]/g, '')
+    if (core.length < 3) continue
+    if (STOP.has(core.toLowerCase())) continue
+    if (HANGING.has(core.toLowerCase()) || NOT_TERM.has(core.toLowerCase())) continue
+    if (seen.has(core.toLowerCase())) continue
+    if (!srcLow.includes(core.toLowerCase()) || !sumLow.includes(core.toLowerCase())) continue
+
+    const isAcronym = /^[A-Z]{2,6}$/.test(core)
+    const isTitleCase = /^[A-Z][a-z]{2,}$/.test(k)
+    const hyphenSci = /^[a-z]{3,}-[a-z]{3,}$/.test(k)
+    const defined = isDefinedIn(summary, core)
+    const hard = isHardWord(core) && !isTitleCase
+
+    if (isTitleCase && !isAcronym && !defined) continue
+    if (!isAcronym && !defined && !hyphenSci && !hard) continue
+
+    seen.add(core.toLowerCase())
+    out.push(k)
+    if (out.length >= MAX_TERM_EMPHASIS) break
+  }
+  return out
+}
+
+function stripTrailPunct(s: string): string {
+  return s.replace(/[.,;:!?]+$/g, '')
+}
+
+function pickQuotedTerms(summary: string): string[] {
+  const terms: string[] = []
+  const re = /["\u201C\u201D']([^"\u201C\u201D']{3,48})["\u201C\u201D']/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(summary))) {
+    const inner = m[1].trim()
+    if (phraseWordCount(inner) === 1 && !/^[A-Z][a-z]+$/.test(inner)) terms.push(inner)
+  }
+  return terms
+}
+
+function pickDefinedTerms(summary: string): string[] {
+  const out: string[] = []
+  const re = /\b(?:a|an|the)\s+([A-Za-z][A-Za-z-]{3,})\s+is\b/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(summary))) out.push(m[1])
+  const called = /\bcalled\s+([A-Za-z][A-Za-z-]{3,})\b/gi
+  while ((m = called.exec(summary))) out.push(m[1])
+  return out
+}
+
+function pickHardWords(summary: string): string[] {
+  const out: string[] = []
+  for (const raw of summary.split(/\s+/).filter(Boolean)) {
+    const w = stripTrailPunct(raw)
+    if (/^[A-Z]/.test(w)) continue
+    const core = w.replace(/[^A-Za-z0-9'-]/g, '')
+    if (isHardWord(core)) out.push(w)
+  }
+  return out
+}
+
+function pickTermEmphasis(summary: string, source: string): string[] {
+  const hyphen = summary.match(/\b[a-z]{3,}-[a-z]{3,}\b/g) ?? []
+  return filterTermEmphasis(summary, source, [
+    ...pickDefinedTerms(summary),
+    ...pickQuotedTerms(summary),
+    ...hyphen,
+    ...pickHardWords(summary)
+  ])
+}
+
+function phraseUntilPunct(words: string[], start: number, maxWords: number): string {
+  const out: string[] = []
+  for (let i = start; i < words.length && out.length < maxWords; i++) {
+    out.push(words[i])
+    if (/[.!?;]$/.test(words[i])) break
+  }
+  return stripTrailPunct(out.join(' '))
+}
+
+/** Why / comparison / outcome only — not mild compounds or quoted trivia. */
+function pickClaimPhrases(summary: string): string[] {
   const words = summary.split(/\s+/).filter(Boolean)
-  let best = ''
-  let bestScore = 0
-  for (const w of words) {
-    const core = w.replace(/[^a-zA-Z0-9'-]/g, '')
-    if (!core || core.length < 2) continue
-    const score =
-      (/\d/.test(core) ? 4 : 0) +
-      (/^[A-Z][a-z]{2,}/.test(core) ? 3 : 0) +
-      Math.min(core.length, 8)
-    if (score > bestScore) {
-      bestScore = score
-      best = w.replace(/[.,;:!?]+$/g, '')
+  const bare = words.map((w) => stripTrailPunct(w).toLowerCase())
+  const out: string[] = []
+
+  for (let i = 0; i < bare.length; i++) {
+    if (bare[i] === 'because' || bare[i] === 'therefore') {
+      out.push(phraseUntilPunct(words, i, 10))
+    }
+    if (bare[i] === 'due' && bare[i + 1] === 'to') {
+      out.push(phraseUntilPunct(words, i, 8))
+    }
+    if (bare[i] === 'this' && bare[i + 1] === 'is' && bare[i + 2] === 'why') {
+      out.push(phraseUntilPunct(words, i, 10))
+    }
+    if (bare[i] === 'so' && bare[i + 1] === 'that') {
+      out.push(phraseUntilPunct(words, i, 8))
+    }
+    if (bare[i] === 'more' && bare[i + 1] === 'than') {
+      const start = Math.max(0, i - 3)
+      out.push(phraseUntilPunct(words, start, Math.min(8, i - start + 4)))
+    }
+    if (bare[i] === 'separated' && bare[i + 1] === 'into') {
+      out.push(phraseUntilPunct(words, i, 6))
+    }
+    if ((bare[i] === 'shorter' || bare[i] === 'longer') && bare[i + 1] === 'than') {
+      const start = Math.max(0, i - 2)
+      out.push(phraseUntilPunct(words, start, 6))
     }
   }
-  return best
+  return out
 }
 
-export function splitLegacyKeyPoints(keyPoints: string[]): { keyPhrases: string[]; boldTerms: string[] } {
-  const keyPhrases: string[] = []
-  const boldTerms: string[] = []
-  for (const kp of keyPoints) {
-    const k = String(kp).trim()
-    if (!k) continue
-    if (wordCount(k) >= 2) keyPhrases.push(k)
-    else boldTerms.push(k)
-  }
-  return { keyPhrases, boldTerms }
+function pickHighlightPhrases(summary: string, source: string): string[] {
+  return filterHighlightPhrases(summary, source, pickClaimPhrases(summary))
 }
 
-export function finalizeModelSimplify(
-  summary: string,
-  opts: {
-    keyPhrases?: string[]
-    boldTerms?: string[]
-    keyPoints?: string[]
-    chunkText?: string
+function keepOriginal(text: string): EmphasisFields {
+  return {
+    summary: text.trim().replace(/\s+/g, ' '),
+    highlightPhrases: [],
+    termEmphasis: []
   }
-): { summary: string; keyPhrases: string[]; boldTerms: string[] } {
-  const sig = opts.chunkText ?? summary
-  const sourceWords = wordCount(sig)
-
-  let s = summary.trim().replace(/\s+/g, ' ')
-  const cap = dynamicWordCap(sourceWords)
-  s = clampSummaryWords(s, cap)
-
-  if (sourceWords > 30 && wordCount(s) > cap) {
-    s = clampSummaryWords(s, cap)
-  }
-
-  const legacy = opts.keyPoints?.length ? splitLegacyKeyPoints(opts.keyPoints) : { keyPhrases: [], boldTerms: [] }
-  let keyPhrases = [...(opts.keyPhrases ?? []), ...legacy.keyPhrases]
-  let boldTerms = [...(opts.boldTerms ?? []), ...legacy.boldTerms]
-
-  keyPhrases = alignSpansToSummary(s, keyPhrases, MAX_KEY_PHRASES)
-    .filter((p) => wordCount(p) >= 2 && isMeaningfulPhrase(p))
-  boldTerms = alignSpansToSummary(s, boldTerms, MAX_BOLD_TERMS).filter((t) => wordCount(t) <= 2)
-
-  if (keyPhrases.length < 1) {
-    const extra = pickKeyPhrases(s, sig, MAX_KEY_PHRASES).filter(isMeaningfulPhrase)
-    keyPhrases = alignSpansToSummary(s, [...keyPhrases, ...extra], MAX_KEY_PHRASES)
-  }
-
-  if (keyPhrases.length < 1) {
-    const fallback = pickKeyPhrases(s, sig, 1, false)
-    keyPhrases = alignSpansToSummary(s, [...keyPhrases, ...fallback], MAX_KEY_PHRASES)
-  }
-
-  if (boldTerms.length < 2) {
-    const extra = pickBoldTerms(s, sig, keyPhrases, MAX_BOLD_TERMS)
-    boldTerms = alignSpansToSummary(s, [...boldTerms, ...extra], MAX_BOLD_TERMS)
-  }
-
-  if (boldTerms.length < 1) {
-    const anchor = pickBestAnchorTerm(s)
-    if (anchor) boldTerms = alignSpansToSummary(s, [anchor], MAX_BOLD_TERMS)
-  }
-
-  return { summary: s, keyPhrases: keyPhrases.slice(0, MAX_KEY_PHRASES), boldTerms: boldTerms.slice(0, MAX_BOLD_TERMS) }
 }
 
-export function heuristicSummarizeParagraph(text: string): {
-  summary: string
-  keyPhrases: string[]
-  boldTerms: string[]
-} {
-  const t = text.trim().replace(/\s+/g, ' ')
-  if (!t) return { summary: '', keyPhrases: [], boldTerms: [] }
+export function heuristicSummarizeParagraph(text: string): EmphasisFields {
+  const t = stripWikiCites(text.trim().replace(/\s+/g, ' '))
+  if (!t) return { summary: '', highlightPhrases: [], termEmphasis: [] }
+  if (shouldSkipChromeText(t) || !isProseBlock(t)) return keepOriginal(t)
 
-  const wordsAll = t.split(/\s+/).filter(Boolean)
-  let rewritten = plainLanguageRewrite(t)
-  const cap = dynamicWordCap(wordsAll.length)
-  let summary = clampSummaryWords(rewritten, cap)
-
-  if (summary.length < 28 && wordsAll.length > 10) {
-    summary = clampSummaryWords(plainLanguageRewrite(wordsAll.join(' ')), cap)
+  const summary = extractiveCompress(t)
+  if (!isFaithfulSummary(t, summary.replace(/…$/, ''))) {
+    return keepOriginal(t)
   }
 
-  const critical = t.match(
-    /\b(?:\$\d[\d,.]*|\d+(?:\.\d+)?%|\d[\d,.]*\s*(?:million|billion|miles?|km|light-years?)|\b(?:19|20)\d{2}\b(?:\s*[-–]\s*(?:19|20)?\d{2,4})?)/gi
-  )
-  if (critical) {
-    for (const c of critical.slice(0, 2)) {
-      if (!summary.includes(c)) {
-        summary = `${c} — ${summary}`
-      }
-    }
-    summary = clampSummaryWords(summary, cap + 4)
-  }
-
-  const keyPhrases = alignSpansToSummary(
+  return {
     summary,
-    pickKeyPhrases(summary, t, MAX_KEY_PHRASES).filter(isMeaningfulPhrase),
-    MAX_KEY_PHRASES
-  )
-  const boldTerms = alignSpansToSummary(
-    summary,
-    pickBoldTerms(summary, t, keyPhrases, MAX_BOLD_TERMS),
-    MAX_BOLD_TERMS
-  )
-
-  return { summary, keyPhrases, boldTerms }
+    highlightPhrases: pickHighlightPhrases(summary, t),
+    termEmphasis: pickTermEmphasis(summary, t)
+  }
 }
 
 export function heuristicSimplifyChunks(chunks: SimplifyChunk[]): SimplifyResult[] {
   return chunks.map((c) => {
-    const { summary, keyPhrases, boldTerms } = heuristicSummarizeParagraph(c.text)
-    return { id: c.id, summary, keyPhrases, boldTerms }
+    const fields = heuristicSummarizeParagraph(c.text)
+    return { id: c.id, ...fields }
   })
+}
+
+export function emphasizeSimplification(summary: string, source: string): EmphasisFields {
+  return {
+    summary,
+    highlightPhrases: pickHighlightPhrases(summary, source),
+    termEmphasis: pickTermEmphasis(summary, source)
+  }
+}
+
+export function finalizeModelSimplify(
+  summary: string,
+  highlightPhrases: string[],
+  termEmphasis: string[],
+  chunkText: string
+): EmphasisFields {
+  const source = stripWikiCites(chunkText.trim())
+  if (shouldSkipChromeText(source) || !isProseBlock(source)) return keepOriginal(source)
+
+  const sourceWords = wordCount(source)
+  const budget = summaryWordRange(source).max
+  const s = stripWikiCites(summary.trim()).replace(/\s+/g, ' ')
+  const summaryWords = wordCount(s)
+  if (
+    sourceWords > MIN_KEEP_WORDS &&
+    (summaryWords > budget || summaryWords < Math.ceil(sourceWords * 0.5))
+  ) {
+    return heuristicSummarizeParagraph(source)
+  }
+  if (!s || !isFaithfulSummary(source, s)) {
+    return heuristicSummarizeParagraph(source)
+  }
+
+  return {
+    summary: s,
+    highlightPhrases: filterHighlightPhrases(s, source, [...highlightPhrases, ...pickClaimPhrases(s)]),
+    termEmphasis: filterTermEmphasis(s, source, [...termEmphasis, ...pickTermEmphasis(s, source)])
+  }
 }
