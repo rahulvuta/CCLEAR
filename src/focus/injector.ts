@@ -30,82 +30,75 @@ export function getInjectReadingAssistScript(): string {
       pointer-events: none !important;
     }
 
+    /* Hide noscript content only inside main content, not globally */
     html.${RA} noscript,
     html.${RA} .msg--noscript {
       display: none !important;
     }
 
-    [data-cclear-simplified="true"],
-    [data-cclear-simplified="inline"] {
-      color: var(--cclear-text-color, inherit) !important;
+    /* Keep the site's layout. Only loosen dense body copy. */
+    html.${FOCUS_MODE_CLASS} .mw-parser-output .ambox,
+    html.${FOCUS_MODE_CLASS} .mw-parser-output .hatnote,
+    html.${FOCUS_MODE_CLASS} .mw-editsection {
+      display: none !important;
     }
 
-    .cclear-summary-text {
-      font-size: inherit;
-      line-height: inherit;
+    [data-cclear-simplified] {
+      line-height: 1.7 !important;
+      font-size: 1.06em;
+      letter-spacing: 0.01em;
+    }
+    [data-cclear-simplified] .cclear-summary-text {
+      display: inline;
     }
 
-    mark.cclear-phrase {
-      background-color: rgba(250, 204, 21, 0.28) !important;
+    mark.cclear-highlight {
+      background: rgba(250, 204, 21, 0.35) !important;
       color: inherit !important;
-      padding: 0 1px !important;
-      border-radius: 2px !important;
-      box-decoration-break: clone !important;
-      -webkit-box-decoration-break: clone !important;
-      font-weight: inherit !important;
+      padding: 1px 3px;
+      border-radius: 3px;
+      font-weight: inherit;
+      box-decoration-break: clone;
     }
     strong.cclear-term {
+      font-weight: 700;
+      background: none;
+    }
+    [data-cclear-page-mark="highlight"] {
+      background: rgba(186, 230, 253, 0.72) !important;
+      border-radius: 4px;
+      box-decoration-break: clone;
+    }
+    span.cclear-page-sent[data-cclear-page-mark="highlight"] {
+      padding: 0 2px;
+    }
+    [data-cclear-page-mark="underline"] {
+      text-decoration: underline !important;
+      text-decoration-color: #38bdf8 !important;
+      text-decoration-thickness: 2px !important;
+      text-underline-offset: 3px;
+    }
+    [data-cclear-page-mark="bold"] {
       font-weight: 700 !important;
-      color: inherit !important;
-      background: none !important;
     }
-    mark.cclear-highlight {
-      background-color: rgba(250, 204, 21, 0.28) !important;
-      color: inherit !important;
-      padding: 0 1px !important;
-      border-radius: 2px !important;
-      box-decoration-break: clone !important;
-      -webkit-box-decoration-break: clone !important;
-    }
-
-    .cclear-toggle-inline {
-      display: inline;
-      margin-left: 6px;
-      padding: 0;
-      border: none;
-      background: transparent;
-      color: inherit;
-      font-size: 0.75em;
-      opacity: 0.5;
-      cursor: pointer;
-      text-decoration: underline;
-      vertical-align: baseline;
-    }
-    .cclear-toggle-inline:hover {
-      opacity: 0.85;
-    }
-
-    .cclear-original-inline {
-      display: block;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px dashed color-mix(in srgb, currentColor 30%, transparent);
-      opacity: 0.6;
-      font-size: 0.92em;
-      line-height: 1.5;
-      white-space: pre-wrap;
+    [data-cclear-page-mark].cclear-page-scroll-target {
+      outline: 2px solid rgba(56, 189, 248, 0.65);
+      outline-offset: 3px;
     }
   `.replace(/\s+/g, ' ')
   return `(() => {
     const id = 'cclear-reading-style';
-    if (document.getElementById(id)) return;
-    const style = document.createElement('style');
-    style.id = id;
-    style.textContent = ${JSON.stringify(css)};
+    const css = ${JSON.stringify(css)};
+    let style = document.getElementById(id);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = id;
+      document.head.appendChild(style);
+    }
+    style.textContent = css;
     const isSearch = /google\\.|duckduckgo\\.|bing\\.|yahoo\\.|brave\\.|kagi\\./i.test(location.hostname);
     document.documentElement.setAttribute('data-cclear-is-search', isSearch ? 'true' : 'false');
     document.documentElement.classList.add(${JSON.stringify(RA)});
-    document.head.appendChild(style);
   })();`
 }
 
