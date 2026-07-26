@@ -9,16 +9,18 @@ A macOS-friendly Electron wrapper around a minimalist browser chrome with:
 
 ## Prerequisites
 
-1. Install [Ollama](https://ollama.com) and pull the model:
+1. Install [Ollama](https://ollama.com) and pull the models:
 
 ```bash
 ollama pull mistral:7b
+ollama pull llava:latest   # screen vision (optional but recommended)
 ```
 
 2. Optionally set these environment variables:
 
 - `CCLEAR_OLLAMA_HOST` defaults to `http://127.0.0.1:11434`
 - `CCLEAR_OLLAMA_MODEL` defaults to `mistral:7b`
+- `CCLEAR_OLLAMA_VISION_MODEL` defaults to `llava:latest`
 
 ## Development
 
