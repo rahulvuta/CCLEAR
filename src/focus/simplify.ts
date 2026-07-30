@@ -1,51 +1,20 @@
 import type { PageBlockForSimplify, SimplifyChunk } from '../shared/types'
+import { EXTRACT_FILTER_JS } from './blockFilters'
 import { buildReplacementInnerHtml } from './simplifyApplyHtml'
 
 /** minChars ↑ = fewer/smaller prompts; slices cap how many chunks go to the model at once */
 export function getExtractChunksScript(minChars = 140, isSearch = false): string {
   return `(() => {
+    ${EXTRACT_FILTER_JS}
     const isSearch = ${isSearch};
     for (const n of Array.from(document.querySelectorAll('[data-cclear-src-id]'))) {
       n.removeAttribute('data-cclear-src-id');
     }
     const MIN = ${minChars};
     const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','PRE','TEXTAREA','SVG']);
-    const avoidSel = 'nav, footer, aside, header, [role="navigation"], [aria-hidden="true"]';
-    const widgetSel = '[class*="widget"], [class*="toolbar"], [class*="modal"], [class*="popup"]';
+    const avoidSel = 'nav, footer, aside, header, [role="navigation"], [aria-hidden="true"], .ambox, .hatnote, .reflist, .mw-references-wrap, .mw-editsection, .navbox, .catlinks';
+    const chromeSel = 'time, cite, [role="citation"]';
     const contentShell = 'main, article, section, [role="main"], [role="article"], body';
-    const SAFE_TAGS = new Set(['P', 'LI', 'BLOCKQUOTE']);
-    const SEARCH_TAGS = new Set(['P', 'SPAN', 'DIV']);
-
-    function isLinkHeavy(el) {
-      const links = el.querySelectorAll('a[href]');
-      if (links.length > 6) return true;
-      const total = (el.innerText || '').length;
-      if (total === 0) return false;
-      let linkTextLen = 0;
-      for (const a of links) linkTextLen += (a.innerText || '').length;
-      return linkTextLen / total > 0.35;
-    }
-
-    function shouldSkipBlock(text, tagName) {
-      const t = text.trim();
-      if (!t) return true;
-      if (/https?:\\/\\//i.test(t)) return true;
-      if ((t.match(/www\\./gi) || []).length >= 2) return true;
-      const urlish = (t.match(/[a-z0-9-]+\\.(com|org|net|edu|gov|io)\\b/gi) || []).length;
-      if (urlish >= 2) return true;
-      if (/^\\d{4}\\s*[—–-]/.test(t)) return true;
-      if (/^\\d{1,2}\\s+\\w{3,9}\\s+\\d{4}\\s*[—–-]/i.test(t)) return true;
-      if (/^did you know\\b/i.test(t)) return true;
-      const pipes = (t.match(/[|›]/g) || []).length;
-      if (pipes >= 2 && pipes / t.length > 0.02) return true;
-      return false;
-    }
-
-    function hasInteractiveUI(el) {
-      if (el.querySelector('button, input, select, textarea, video, iframe, details, summary, [role="button"]')) return true;
-      return isLinkHeavy(el);
-    }
-
     function getTextColor(node) {
       if (node.nodeType === 3 && node.textContent.trim().length > 0) {
         return window.getComputedStyle(node.parentElement).color;
@@ -58,84 +27,61 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
     }
 
     let idx = 0;
-    const rawBlocks = [];
-
-    function collectFrom(candidates, minLen) {
-      for (const el of Array.from(candidates)) {
-        if (SKIP.has(el.tagName)) continue;
-        if (!isSearch && !SAFE_TAGS.has(el.tagName)) continue;
-        if (isSearch && !SEARCH_TAGS.has(el.tagName)) continue;
-        if (!el.closest(contentShell)) continue;
-        if (el.closest(avoidSel)) continue;
-        if (el.closest(widgetSel)) continue;
-        if (isSearch && (el.tagName === 'A' || el.querySelector('a'))) continue;
-        if (!isSearch && hasInteractiveUI(el)) continue;
-        if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
-        if (el.querySelector('noscript')) continue;
-        const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
-        if (t.length < minLen) continue;
-        if (shouldSkipBlock(t, el.tagName.toLowerCase())) continue;
-        rawBlocks.push({ el, text: t, tagName: el.tagName.toLowerCase() });
-      }
-    }
-
-    function queryCandidates() {
-      if (isSearch) return document.querySelectorAll('p, span');
-      const primary = document.querySelectorAll('article p, [role="main"] p, main p, article li, [role="main"] li, blockquote');
-      if (primary.length >= 2) return primary;
-      return document.querySelectorAll('p, li, blockquote');
-    }
-
-    let candidates = queryCandidates();
-    collectFrom(candidates, MIN);
-
-    if (rawBlocks.length === 0) {
-      const min2 = Math.max(isSearch ? 40 : 72, MIN - (isSearch ? 50 : 35));
-      candidates = isSearch ? document.querySelectorAll('p, span') : document.querySelectorAll('p, li, blockquote');
-      collectFrom(candidates, min2);
-    }
-
-    if (rawBlocks.length === 0 && document.body) {
-      const min3 = isSearch ? 30 : 52;
-      const c = isSearch ? document.body.querySelectorAll('p, span') : document.body.querySelectorAll('p, li, blockquote');
-      let seen = 0;
-      for (const el of Array.from(c)) {
-        collectFrom([el], min3);
-        if (++seen > 40) break;
-      }
-    }
-
-    const kept = [];
-    for (let i = 0; i < rawBlocks.length; i++) {
-      const a = rawBlocks[i];
-      let dominated = false;
-      for (let j = 0; j < rawBlocks.length; j++) {
-        if (i === j) continue;
-        const b = rawBlocks[j];
-        if (a.el !== b.el && a.el.contains(b.el) && b.text.length >= a.text.length * 0.85) {
-          dominated = true;
-          break;
-        }
-        if (a.text === b.text && a.el.contains(b.el)) {
-          dominated = true;
-          break;
-        }
-      }
-      if (!dominated) kept.push(a);
-    }
-
     const blocks = [];
-    for (const item of kept) {
+    function pushBlock(el, minLen) {
+      if (SKIP.has(el.tagName)) return;
+      if (el.closest('[data-cclear-simplified]')) return;
+      if (!el.closest(contentShell)) return;
+      if (el.closest(avoidSel)) return;
+      if (el.closest(chromeSel)) return;
+      if (el.tagName === 'TIME') return;
+      var cls = String(el.className || '').toLowerCase();
+      if (/byline|share-row|sharebar|social-share/.test(cls)) return;
+      if (isSearch && (el.tagName === 'A' || el.querySelector('a'))) return;
+      if (el.parentElement && el.parentElement.closest('[data-cclear-src-id]')) return;
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+      if (el.querySelector('noscript')) return;
+      const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
+      if (t.length < minLen) return;
+      if (shouldSkipChromeText(t)) return;
+      if (!isProseBlock(t)) return;
+      
       const id = 'cclear-b-' + idx++;
-      item.el.setAttribute('data-cclear-src-id', id);
-      const tc = getTextColor(item.el);
-      if (tc) item.el.style.setProperty('--cclear-text-color', tc);
+      el.setAttribute('data-cclear-src-id', id);
+      
+      const tc = getTextColor(el);
+      if (tc) el.style.setProperty('--cclear-text-color', tc);
+
       blocks.push({
         id: id,
-        text: item.text,
-        outerHtmlLength: item.el.outerHTML.length,
-        tagName: item.tagName
+        text: t,
+        outerHtmlLength: el.outerHTML.length,
+        tagName: el.tagName.toLowerCase()
       });
+    }
+    let candidates;
+    if (isSearch) {
+      candidates = document.querySelectorAll('p, [data-sncf], .VwiC3b, .result__snippet, .b_caption p, .snippet');
+    } else {
+      candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption');
+    }
+    for (const el of Array.from(candidates)) {
+      pushBlock(el, MIN);
+    }
+    if (blocks.length === 0) {
+      const min2 = Math.max(isSearch ? 40 : 72, MIN - (isSearch ? 50 : 35));
+      for (const el of Array.from(candidates)) {
+        pushBlock(el, min2);
+      }
+    }
+    if (blocks.length === 0 && document.body) {
+      var min3 = isSearch ? 30 : 52;
+      var seen = 0;
+      const c = document.body.querySelectorAll('p');
+      for (var el of Array.from(c)) {
+        pushBlock(el, min3);
+        if (++seen > 40) break;
+      }
     }
     return blocks;
   })();`
@@ -148,10 +94,8 @@ export function pageBlocksToSimplifyChunks(blocks: PageBlockForSimplify[]): Simp
 export type ApplySummaryItem = {
   id: string
   summary: string
-  keyPhrases?: string[]
-  boldTerms?: string[]
-  /** @deprecated legacy — normalized to keyPhrases/boldTerms at apply time */
-  keyPoints?: string[]
+  highlightPhrases?: string[]
+  termEmphasis?: string[]
   /** Original passage text preserved for expand toggle */
   original?: string
   /** e.g. p, li — used when restoring wrappers to native elements */
@@ -161,26 +105,11 @@ export type ApplySummaryItem = {
 export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = false): string {
   const payload = items.map((item) => ({
     id: item.id,
-    tagName: item.tagName ?? '',
     __html: buildReplacementInnerHtml(item, '', isSearch),
   }))
   const json = JSON.stringify(payload)
   return `(() => {
     const payload = ${json};
-    const ARTICLE_TAGS = new Set(['P', 'LI', 'BLOCKQUOTE']);
-    const SEARCH_TAGS = new Set(['P', 'SPAN', 'DIV']);
-    const ALLOWED = ${isSearch ? 'SEARCH_TAGS' : 'ARTICLE_TAGS'};
-
-    function isLinkHeavy(el) {
-      const links = el.querySelectorAll('a[href]');
-      if (links.length > 6) return true;
-      const total = (el.innerText || '').length;
-      if (total === 0) return false;
-      let linkTextLen = 0;
-      for (const a of links) linkTextLen += (a.innerText || '').length;
-      return linkTextLen / total > 0.35;
-    }
-
     let count = 0;
     for (const item of payload) {
       const el = document.querySelector('[data-cclear-src-id="' + item.id + '"]');
@@ -189,15 +118,10 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
         count++;
         continue;
       }
-      const tag = el.tagName;
-      if (!ALLOWED.has(tag)) continue;
-      if (item.tagName && item.tagName.toUpperCase() !== tag) continue;
-      if (el.querySelector('button, input, select, textarea, video, iframe, details, summary, [role="button"]')) continue;
-      if (isLinkHeavy(el)) continue;
 
       const origHtml = el.innerHTML;
       el.setAttribute('data-cclear-original-html', origHtml);
-      el.setAttribute('data-cclear-simplified', ${isSearch ? "'inline'" : "'true'"});
+      el.setAttribute('data-cclear-simplified', 'inline');
       el.innerHTML = item.__html;
       count++;
     }
@@ -207,6 +131,7 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
 
 export function buildRestoreSummariesScript(): string {
   return `(() => {
+    document.documentElement.removeAttribute('data-cclear-focus-complete');
     const els = Array.from(document.querySelectorAll('[data-cclear-simplified]'));
     for (const el of els) {
       const origHtml = el.getAttribute('data-cclear-original-html');
@@ -215,10 +140,6 @@ export function buildRestoreSummariesScript(): string {
       }
       el.removeAttribute('data-cclear-simplified');
       el.removeAttribute('data-cclear-original-html');
-      el.removeAttribute('data-cclear-src-id');
-    }
-    for (const el of Array.from(document.querySelectorAll('[data-cclear-src-id]'))) {
-      el.removeAttribute('data-cclear-src-id');
     }
   })();`
 }
