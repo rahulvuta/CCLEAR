@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useRef, type Dispatch, SetStateAction } from 'react'
 import type { ChatMessage } from '../../shared/types'
 
 type Props = {
@@ -8,17 +8,23 @@ type Props = {
   input: string
   setInput: Dispatch<SetStateAction<string>>
   sending: boolean
+  thinking?: string
+  draft?: string
   onSend: (override?: string) => void
 }
 
 export function ChatSidebar(props: Props) {
-  const { aiHealthy, aiHint, messages, input, setInput, sending, onSend } = props
+  const { aiHealthy, aiHint, messages, input, setInput, sending, thinking, draft, onSend } = props
+  const thinkRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (thinkRef.current) thinkRef.current.scrollTop = thinkRef.current.scrollHeight
+  }, [thinking])
 
   return (
     <div className="chat">
       <div className="chatHead">
-        <div className="chatTitle">Assistant</div>
-        <div className="chatSubtitle">Local focus helper</div>
+        <div className="chatTitle">CCLEAR</div>
+        <div className="chatSubtitle">Focus assistant</div>
 
         <div style={{ marginTop: 10 }}>
           <div className="quickRow">
@@ -41,19 +47,34 @@ export function ChatSidebar(props: Props) {
         </div>
       </div>
       <div className="chatBody">
-        {messages.length === 0 && <div className="emptyHint">Ask for navigation, summaries, or a calmer plan.</div>}
+        {messages.length === 0 && (
+          <div className="emptyHint">Ask to underline, highlight, scroll to a section, or summarize the page.</div>
+        )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'bubble bubbleUser' : 'bubble bubbleAsst'}>
             {m.content}
           </div>
         ))}
-        {sending && (
+        {sending && thinking ? (
+          <div className="chatThink" ref={thinkRef}>
+            {thinking}
+          </div>
+        ) : null}
+        {sending && draft ? <div className="bubble bubbleAsst">{draft}</div> : null}
+        {sending && !draft && !thinking && (
           <div className="bubble bubbleAsst loadingBubble">
             <span className="dot"></span>
             <span className="dot"></span>
             <span className="dot"></span>
           </div>
         )}
+        {sending && thinking && !draft ? (
+          <div className="bubble bubbleAsst loadingBubble">
+            <span className="dot"></span>
+            <span className="dot"></span>
+            <span className="dot"></span>
+          </div>
+        ) : null}
       </div>
       <div className="chatInputRow">
         <textarea
