@@ -1,31 +1,16 @@
 import { useState } from 'react'
 import type { TabContextSummary } from '../../shared/types'
 
-const ERROR_REASONS = new Set([
-  "Couldn't infer context",
-  'AI unavailable',
-  'Loading...',
-  'Unable to analyze.'
-])
-
-function isErrorSummary(summary: TabContextSummary): boolean {
-  if (ERROR_REASONS.has(summary.inferredReason)) return true
-  if (summary.summary === 'Unable to analyze.') return true
-  return false
-}
-
 type ItemProps = {
   summary: TabContextSummary
 }
 
 function WhyAmIHereItem({ summary }: ItemProps) {
   const [hovered, setHovered] = useState(false)
-  const isError = isErrorSummary(summary)
-  const showSummary = isError || hovered
 
   return (
     <div
-      className={`whyBoxItem${isError ? ' whyBoxItemError' : ''}`}
+      className="whyBoxItem"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -41,8 +26,8 @@ function WhyAmIHereItem({ summary }: ItemProps) {
       <div className="whyBoxRow">
         <strong>Goal:</strong> {summary.inferredReason}
       </div>
-      {showSummary && (
-        <div className={`whyBoxInlineSummary${isError ? ' whyBoxInlineSummaryError' : ''}`}>
+      {hovered && (
+        <div className="whyBoxInlineSummary">
           <strong>Summary:</strong> {summary.summary}
         </div>
       )}

@@ -1,0 +1,95 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createSimplifier, rewriteIssues } from '../../src/ai/simplifyBlocks'
+import { heuristicSummarizeParagraph, summaryWordRange } from '../../src/focus/heuristicSimplify'
+import { automotiveEngine } from '../fixtures/automotiveEngine'
+
+const source = 'The steam engine is a device that uses heat to produce mechanical motion. Its boiler produces steam by boiling water, and the steam provides power to move the engine.'
+const good = 'Steam engines turn heat into mechanical motion. Boilers boil water to produce steam that powers the engine.'
+
+function response(key: string, rows: unknown[]) { return JSON.stringify({ [key]: rows }) }
+
+describe('Focus rewrite pipeline', () => {
+  it('uses a percentage budget even for long blocks', () => {
+    const range = summaryWordRange(automotiveEngine.find((c) => c.id === 'history')!.text)
+    expect(range.min).toBeGreaterThan(40)
+    expect(range.target).toBeGreaterThan(range.min)
+    expect(range.target).toBeLessThan(range.max)
+  })
+
+  it('processes all blocks, sends text beyond 900 characters, and caches only validated results', async () => {
+    const seen: string[] = []
+    const generate = vi.fn(async (params: { system: string; prompt: string }) => {
+      const { blocks } = JSON.parse(params.prompt)
+      if (params.system.startsWith('Check')) return response('reviews', blocks.map((b: { id: string }) => ({ id: b.id, issues: [] })))
+      seen.push(...blocks.map((b: { source: string }) => b.source))
+      return response('blocks', blocks.map((b: { id: string }) => ({ id: b.id, summary: good })))
+    })
+    const simplify = createSimplifier(generate)
+    const chunks = Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, text: source }))
+    const results = await simplify(chunks)
+    expect(results.map((r) => r.id)).toEqual(chunks.map((c) => c.id))
+    expect(results.every((r) => r.summary === good && r.status === 'simplified')).toBe(true)
+    expect(seen).toHaveLength(7)
+    const calls = generate.mock.calls.length
+    expect((await simplify([{ id: 'new-id', text: source }]))[0].id).toBe('new-id')
+    expect(generate).toHaveBeenCalledTimes(calls)
+
+    const long = automotiveEngine.find((c) => c.id === 'history')!
+    await simplify([long])
+    expect(seen).toContain(long.text)
+    expect(long.text.length).toBeGreaterThan(900)
+  })
+
+  it('repairs drafts outside the word range without clipping them', async () => {
+    const generate = vi.fn()
+      .mockResolvedValueOnce(response('blocks', [{ id: 'a', summary: source }]))
+      .mockResolvedValueOnce(response('blocks', [{ id: 'a', summary: good }]))
+      .mockResolvedValueOnce(response('reviews', [{ id: 'a', issues: [] }]))
+    const [result] = await createSimplifier(generate)([{ id: 'a', text: source }])
+    expect(result.summary).toBe(good)
+    const repair = JSON.parse(generate.mock.calls[1][0].prompt).blocks[0].repair
+    expect(repair.draft).toBe(source)
+    expect(repair.issues[0]).toMatch(/words/)
+  })
+
+  it('repairs missing mechanisms, even when a draft meets the word budget', async () => {
+    const bad = 'Steam engines are powerful machines that produce mechanical motion. These machines have many uses across the world.'
+    expect(rewriteIssues(source, bad)).toEqual([])
+    const generate = vi.fn()
+      .mockResolvedValueOnce(response('blocks', [{ id: 'a', summary: bad }]))
+      .mockResolvedValueOnce(response('reviews', [{ id: 'a', issues: ['Restore the boiler boiling water to create steam.'] }]))
+      .mockResolvedValueOnce(response('blocks', [{ id: 'a', summary: good }]))
+      .mockResolvedValueOnce(response('reviews', [{ id: 'a', issues: [] }]))
+    const [result] = await createSimplifier(generate)([{ id: 'a', text: source }])
+    expect(result.summary).toBe(good)
+    expect(JSON.parse(generate.mock.calls[2][0].prompt).blocks[0].repair.issues).toEqual(['Restore the boiler boiling water to create steam.'])
+  })
+
+  it.each(['{"reviews":[]}', '{"reviews":[{"id":"a","issues":false}]}', '{"reviews":[{"id":"wrong","issues":[]}]}'])('fails closed for missing or malformed reviews: %s', async (review) => {
+    const generate = vi.fn(async (p: { system: string }) => p.system.startsWith('Check')
+      ? review : response('blocks', [{ id: 'a', summary: good }]))
+    const [result] = await createSimplifier(generate)([{ id: 'a', text: source }])
+    expect(result.summary).toBe(source)
+    expect(result.status).toBe('preserved')
+  })
+
+  it('does not cache a timeout and retries the model on the next invocation', async () => {
+    const generate = vi.fn().mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(response('blocks', [{ id: 'a', summary: good }]))
+      .mockResolvedValueOnce(response('reviews', [{ id: 'a', issues: [] }]))
+    const simplify = createSimplifier(generate)
+    const chunks = [{ id: 'a', text: source }]
+    expect((await simplify(chunks))[0].status).toBe('preserved')
+    expect((await simplify(chunks))[0].status).toBe('simplified')
+  })
+
+  it.each(automotiveEngine)('preserves the definitions, options and history of $id when offline', ({ text, required }) => {
+    const result = heuristicSummarizeParagraph(text)
+    for (const pattern of required) expect(result.summary).toMatch(pattern)
+  })
+
+  it('never drops or invents numbers to meet a budget', () => {
+    expect(rewriteIssues('In 2013, China had smaller research budgets than Europe and Japan.', 'China had smaller research budgets than Europe.')).toEqual(expect.arrayContaining([expect.stringContaining('Restore all source numbers')]))
+    expect(rewriteIssues('The motor runs at a constant speed.', 'The motor runs at 45 mph.')).toEqual(expect.arrayContaining([expect.stringContaining('not present in the source')]))
+  })
+})
