@@ -5,8 +5,7 @@ import { ChatSidebar } from './components/ChatSidebar'
 import { TabStrip, type UITab } from './components/TabStrip'
 import { TopBar } from './components/TopBar'
 import { WebviewHost } from './components/WebviewHost'
-import { BookmarksBar } from './components/BookmarksBar'
-import type { BookmarkItem, ChatMessage, PageBlockForSimplify, Prefs, TabContextItem, TabContextSummary } from '../shared/types'
+import type { ChatMessage, PageBlockForSimplify, TabContextItem, TabContextSummary } from '../shared/types'
 import type { ApplySummaryItem } from '../focus/simplify'
 import { WhyAmIHereBox } from './components/WhyAmIHereBox'
 import {
@@ -15,33 +14,19 @@ import {
   getExtractChunksScript,
   pageBlocksToSimplifyChunks
 } from '../focus/simplify'
+import { selectBlocksForSimplify } from '../focus/blockFilters'
 import { getInjectReadingAssistScript, getSetFocusVisualScript } from '../focus/injector'
-import { needsScreenVision } from '../ai/screenVision'
-import { blockTextHash } from '../focus/textHash'
-import { CHROME_PAGES, chromePageTitle, isChromePageUrl, isInternalUrl } from '../shared/chromeUrls'
+import { detectPageActionIntent, pageActionSay, parsePageActionTags, type PageActionIntent } from '../ai/pageActions'
+import { getPageMarkScript, getPagePassagesScript } from '../focus/pageMarks'
+import type { PagePassageSnapshot } from '../ai/pageActions'
 
-const EXTRACT_MIN_CHARS = 100
+const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
-const SIMPLIFY_MAX_BLOCKS = 24
+const SIMPLIFY_MAX_BLOCKS = 100
 /** Immediate schedule after focus/nav */
 const FOCUS_SIMPLIFY_DEBOUNCE_MS = 800
 /** Re-scan when article text is still hydrating */
 const EXTRACT_RETRY_DELAYS_MS = [300, 800, 1500] as const
-
-const DEFAULT_PREFS: Prefs = {
-  focusModeEnabled: false,
-  showBookmarksBar: true,
-  restoreTabsOnStartup: true,
-  homepage: 'about:blank'
-}
-
-type CachedSimplifyEntry = {
-  textHash: string
-  summary: string
-  keyPhrases: string[]
-  boldTerms: string[]
-  original: string
-}
 
 function normalizeUrl(raw: string): string {
   const t = raw.trim()
@@ -55,6 +40,16 @@ function normalizeUrl(raw: string): string {
   if (t.includes('.') && !t.includes(' ')) return `https://${t}`
   const q = encodeURIComponent(t)
   return `https://www.google.com/search?q=${q}`
+}
+
+function faviconForUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname
+    if (host) return `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+  } catch {
+    //
+  }
+  return ''
 }
 
 async function waitForWebviewQuietImpl(w: WebviewTag): Promise<void> {
@@ -115,43 +110,27 @@ async function waitForWebviewQuiet(w: WebviewTag): Promise<void> {
 
 export function App() {
   const firstId = useMemo(() => String(crypto.randomUUID()), [])
-  const [tabs, setTabs] = useState<UITab[]>([{ id: firstId, url: 'about:blank', title: '' }])
+  const [tabs, setTabs] = useState<UITab[]>([{ id: firstId, url: 'about:blank', src: 'about:blank', title: '' }])
   const [activeId, setActiveId] = useState(firstId)
   const [navUrl, setNavUrl] = useState('about:blank')
   const [focusModeEnabled, setFocusModeEnabled] = useState(false)
   const [simplifyBusy, setSimplifyBusy] = useState(false)
-  const [prefs, setPrefsState] = useState<Prefs>(DEFAULT_PREFS)
-  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
-  const [sessionReady, setSessionReady] = useState(false)
-  const [loadingById, setLoadingById] = useState<Record<string, boolean>>({})
-  const [findOpen, setFindOpen] = useState(false)
-  const [findQuery, setFindQuery] = useState('')
-  const [findActive, setFindActive] = useState(0)
-  const [findCount, setFindCount] = useState(0)
-  const [downloadToast, setDownloadToast] = useState<string | null>(null)
   
   const [tabContexts, setTabContexts] = useState<Record<string, TabContextSummary[]>>({})
   const [contextLoading, setContextLoading] = useState<Record<string, boolean>>({})
   const historyMapRef = useRef<Record<string, string[]>>({})
 
-  /** Per-tab URL cache keyed by block text hash for instant re-simplify on focus toggle */
-  const simplifyApplyCacheRef = useRef<Map<string, Map<string, CachedSimplifyEntry>>>(new Map())
+  /** Last simplified payloads per `${tabId}|url` for instant re-apply */
+  const simplifyApplyCacheRef = useRef<Map<string, ApplySummaryItem[]>>(new Map())
   /** Serial queue so no request is dropped while another tab or navigation is in flight */
   const simplifyChainRef = useRef<Promise<void>>(Promise.resolve())
+  /** Bumped when Focus turns off or the page changes so in-flight applies are discarded */
+  const simplifyEpochRef = useRef(0)
   const runFocusAutoSimplifyRef = useRef<(tabId: string, pageUrl: string) => void>(() => {})
+  const persistFocusModeRef = useRef<(next: boolean) => Promise<void>>(async () => {})
 
   function simplifyCacheKey(tabId: string, url: string): string {
-    return `${tabId}|${url || 'about:blank'}`
-  }
-
-  function getTextHashCache(tabId: string, url: string): Map<string, CachedSimplifyEntry> {
-    const key = simplifyCacheKey(tabId, url)
-    let inner = simplifyApplyCacheRef.current.get(key)
-    if (!inner) {
-      inner = new Map()
-      simplifyApplyCacheRef.current.set(key, inner)
-    }
-    return inner
+    return `${tabId}|v7|${url || 'about:blank'}`
   }
 
   function invalidateSimplifyStateForTab(tabId: string) {
@@ -166,13 +145,13 @@ export function App() {
   const [chatInput, setChatInput] = useState('')
   const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([])
   const [chatSending, setChatSending] = useState(false)
+  const [chatThink, setChatThink] = useState('')
+  const [chatDraft, setChatDraft] = useState('')
   const aiHealthyRef = useRef(false)
   const [aiHealthy, setAiHealthy] = useState<boolean | null>(null)
   const webviewRefs = useRef<Record<string, WebviewTag | null>>({})
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
-  const prefsRef = useRef(prefs)
-  prefsRef.current = prefs
 
   const setupOnce = useRef(new WeakSet<WebviewTag>())
   const focusModeEnabledRef = useRef(focusModeEnabled)
@@ -214,58 +193,40 @@ export function App() {
     }
   }, [])
 
-  const refreshBookmarks = useCallback(() => {
-    void window.cclearBrowser.bookmarks.list().then(setBookmarks).catch(() => {})
-  }, [])
-
-  const persistPrefs = useCallback(async (patch: Partial<Prefs>) => {
-    const next = await window.cclearBrowser.prefs.set(patch)
-    setPrefsState(next)
-    if (patch.focusModeEnabled != null) setFocusModeEnabled(patch.focusModeEnabled)
-  }, [])
-
-  const applyUrlToTab = useCallback((tabId: string, raw: string) => {
-    const nextUrl = isChromePageUrl(raw) ? raw.trim() : normalizeUrl(raw)
-    let favicon = ''
-    let title = ''
-    if (isChromePageUrl(nextUrl)) {
-      title = chromePageTitle(nextUrl)
-    } else {
-      try {
-        const host = new URL(nextUrl).hostname
-        if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
-      } catch { /* */ }
-    }
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, url: nextUrl, title: title || t.title, favicon: favicon || t.favicon } : t))
-    )
-    if (activeIdRef.current === tabId) setNavUrl(nextUrl === 'about:blank' ? '' : nextUrl)
-  }, [])
-
-  const openUrl = useCallback((raw: string, newTab = false) => {
-    const nextUrl = isChromePageUrl(raw) ? raw.trim() : normalizeUrl(raw)
-    if (newTab) {
-      const id = String(crypto.randomUUID())
-      setTabs((t) => [...t, { id, url: nextUrl, title: isChromePageUrl(nextUrl) ? chromePageTitle(nextUrl) : '' }])
-      setActiveId(id)
-      return
-    }
-    applyUrlToTab(activeIdRef.current, nextUrl)
-  }, [applyUrlToTab])
-
-  const recordHistory = useCallback((url: string, title: string, favicon?: string) => {
-    if (isInternalUrl(url)) return
-    void window.cclearBrowser.history.add({ url, title, favicon }).catch(() => {})
-  }, [])
-
   const runFocusAutoSimplifyImpl = useCallback(async (tabId: string, pageUrl: string) => {
-    if (!focusModeEnabledRef.current) return
+    const epoch = simplifyEpochRef.current
     const w = webviewRefs.current[tabId]
     if (!w) return
     const trimmed = pageUrl.trim()
     if (/^about:/i.test(trimmed)) return
 
+    const stillCurrent = () => {
+      if (epoch !== simplifyEpochRef.current || !focusModeEnabledRef.current || activeIdRef.current !== tabId) {
+        return false
+      }
+      try {
+        const now = w.getURL()
+        if (now && now !== trimmed && !/^about:/i.test(now)) return false
+      } catch {
+        //
+      }
+      return true
+    }
+
+    if (!stillCurrent()) return
+
     await waitForWebviewQuiet(w)
+    if (!stillCurrent()) return
+
+    let liveUrl = trimmed
+    try {
+      liveUrl = w.getURL() || trimmed
+    } catch {
+      liveUrl = trimmed
+    }
+    if (liveUrl && liveUrl !== trimmed && !/^about:/i.test(liveUrl)) {
+      return
+    }
 
     let isSearch = false
     try {
@@ -274,11 +235,23 @@ export function App() {
     } catch {
       isSearch = false
     }
+    const cacheKey = simplifyCacheKey(tabId, trimmed)
     const already = (await w.executeJavaScript(
-      `document.querySelector('[data-cclear-simplified]') != null`,
+      `document.documentElement.hasAttribute('data-cclear-focus-complete')`,
       true
     )) as boolean
     if (already) return
+    if (!stillCurrent()) return
+
+    const cached = simplifyApplyCacheRef.current.get(cacheKey)
+    if (cached && cached.length > 0) {
+      const appliedCount = (await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)) as number
+      if (appliedCount === cached.length) {
+        await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
+        return
+      }
+    }
+    if (!stillCurrent()) return
 
     const tryExtract = async () =>
       (await w.executeJavaScript(getExtractChunksScript(EXTRACT_MIN_CHARS, isSearch), true)) as PageBlockForSimplify[]
@@ -286,7 +259,7 @@ export function App() {
     let blocks = await tryExtract()
     if (!blocks.length) {
       for (const ms of EXTRACT_RETRY_DELAYS_MS) {
-        if (!focusModeEnabledRef.current) return
+        if (!stillCurrent()) return
         await new Promise<void>((r) => setTimeout(r, ms))
         try {
           if (typeof w.isLoading === 'function' && w.isLoading()) {
@@ -295,80 +268,55 @@ export function App() {
         } catch {
           //
         }
+        if (!stillCurrent()) return
         blocks = await tryExtract()
         if (blocks.length) break
       }
     }
     if (!blocks.length) return
+    if (!stillCurrent()) return
 
-    const list = [...blocks]
-      .sort((a, b) => b.text.length - a.text.length)
-      .slice(0, SIMPLIFY_MAX_BLOCKS)
+    const list = selectBlocksForSimplify(blocks, SIMPLIFY_MAX_BLOCKS)
+    if (!list.length) return
 
-    const textCache = getTextHashCache(tabId, trimmed)
-    const cachedItems: ApplySummaryItem[] = []
-    const uncachedBlocks: PageBlockForSimplify[] = []
-
-    for (const block of list) {
-      const hash = blockTextHash(block.text)
-      const hit = textCache.get(hash)
-      if (hit) {
-        cachedItems.push({
-          id: block.id,
-          summary: hit.summary,
-          keyPhrases: hit.keyPhrases,
-          boldTerms: hit.boldTerms,
-          original: block.text,
-          tagName: block.tagName
-        })
-      } else {
-        uncachedBlocks.push(block)
-      }
-    }
-
+    const chunks = pageBlocksToSimplifyChunks(list)
+    const origById = new Map(list.map((b) => [b.id, b.text]))
     const tagById = new Map(list.map((b) => [b.id, b.tagName]))
-    const out: ApplySummaryItem[] = [...cachedItems]
 
-    if (uncachedBlocks.length > 0) {
-      setSimplifyBusy(true)
-      try {
-        const chunks = pageBlocksToSimplifyChunks(uncachedBlocks)
-        const origById = new Map(uncachedBlocks.map((b) => [b.id, b.text]))
-        const res = await window.cclearBrowser.ai.simplifyChunks(chunks)
-        for (const r of res) {
-          const original = origById.get(r.id) ?? ''
-          const item: ApplySummaryItem = {
-            ...r,
-            original,
-            summary: r.summary || original.slice(0, 200),
-            keyPhrases: r.keyPhrases ?? [],
-            boldTerms: r.boldTerms ?? [],
-            tagName: tagById.get(r.id)
-          }
-          out.push(item)
-          const hash = blockTextHash(original)
-          textCache.set(hash, {
-            textHash: hash,
-            summary: item.summary,
-            keyPhrases: item.keyPhrases ?? [],
-            boldTerms: item.boldTerms ?? [],
-            original
-          })
-        }
-      } catch (e) {
-        console.warn('[cclear] focus simplify:', e instanceof Error ? e.message : e)
-        return
-      } finally {
-        setSimplifyBusy(false)
-      }
-    }
-
-    if (!out.length) return
-
+    setSimplifyBusy(true)
     try {
-      await w.executeJavaScript(buildApplySummariesScript(out, isSearch), true)
+      const out: ApplySummaryItem[] = []
+      let allSimplified = true
+      for (let offset = 0; offset < chunks.length; offset += 3) {
+        if (!stillCurrent()) return
+        const res = await window.cclearBrowser.ai.simplifyChunks(chunks.slice(offset, offset + 3))
+        if (!stillCurrent()) return
+        const batch = res.map((r) => ({
+          ...r,
+          original: origById.get(r.id),
+          summary: r.summary || (origById.get(r.id) ?? ''),
+          highlightPhrases: r.highlightPhrases ?? [],
+          termEmphasis: r.termEmphasis ?? [],
+          tagName: tagById.get(r.id)
+        }))
+        await w.executeJavaScript(buildApplySummariesScript(batch, isSearch), true)
+        out.push(...batch)
+        allSimplified &&= res.every((r) => r.status === 'simplified')
+        if (!stillCurrent()) {
+          try {
+            await w.executeJavaScript(buildRestoreSummariesScript(), true)
+          } catch {
+            //
+          }
+          return
+        }
+      }
+      if (allSimplified) simplifyApplyCacheRef.current.set(cacheKey, out)
+      await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
     } catch (e) {
-      console.warn('[cclear] focus simplify apply:', e instanceof Error ? e.message : e)
+      console.warn('[cclear] focus simplify:', e instanceof Error ? e.message : e)
+    } finally {
+      if (epoch === simplifyEpochRef.current) setSimplifyBusy(false)
     }
   }, [])
 
@@ -395,34 +343,12 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false
-    void (async () => {
-      try {
-        const p = await window.cclearBrowser.prefs.get()
-        if (cancelled) return
-        setPrefsState(p)
-        setFocusModeEnabled(p.focusModeEnabled)
-        const saved = await window.cclearBrowser.session.get()
-        if (cancelled) return
-        if (p.restoreTabsOnStartup && saved.tabs.length > 0) {
-          setTabs(
-            saved.tabs.map((t) => ({
-              id: t.id,
-              url: t.url,
-              title: t.title,
-              pinned: t.pinned,
-              muted: t.muted
-            }))
-          )
-          const activeOk = saved.tabs.some((t) => t.id === saved.activeId)
-          setActiveId(activeOk ? saved.activeId : saved.tabs[0].id)
-        }
-      } catch {
-        //
-      } finally {
-        if (!cancelled) setSessionReady(true)
-      }
-      refreshBookmarks()
-    })()
+    void window.cclearBrowser.prefs
+      .get()
+      .then((p) => {
+        if (!cancelled) setFocusModeEnabled(p.focusModeEnabled)
+      })
+      .catch(() => {})
     void window.cclearBrowser.ai
       .health()
       .then((h) => {
@@ -434,7 +360,7 @@ export function App() {
     return () => {
       cancelled = true
     }
-  }, [refreshBookmarks])
+  }, [])
 
   useEffect(() => {
     const u = activeTab?.url ?? 'about:blank'
@@ -443,12 +369,16 @@ export function App() {
 
   const persistFocusMode = useCallback(async (next: boolean) => {
     setFocusModeEnabled(next)
-    const updated = await window.cclearBrowser.prefs.set({ focusModeEnabled: next })
-    setPrefsState(updated)
+    if (!next) {
+      simplifyEpochRef.current += 1
+      setSimplifyBusy(false)
+    }
+    await window.cclearBrowser.prefs.set({ focusModeEnabled: next })
     if (!next) {
       await restoreSimplifiedAcrossAllTabs()
     }
   }, [])
+  persistFocusModeRef.current = persistFocusMode
 
   useEffect(() => {
     focusSimplifyScheduleRef.current && clearTimeout(focusSimplifyScheduleRef.current)
@@ -476,25 +406,29 @@ export function App() {
 
       let latestIntendedUrl: string | null = null
 
-      const updUrlFromNav = (_e: any, url: string) => {
-        const effectiveUrl = url || 'about:blank'
-        const currentReactUrl = tabsRef.current.find((t) => t.id === id)?.url
-
-        // Ignore delayed about:blank commits if we've already instructed the tab to go elsewhere
+      const commitDisplayUrl = (raw: string) => {
+        const effectiveUrl = (raw || '').trim() || 'about:blank'
         if (effectiveUrl === 'about:blank' && latestIntendedUrl && latestIntendedUrl !== 'about:blank') {
           return
         }
-        
-        let favicon = ''
-        if (effectiveUrl !== 'about:blank') {
-          try {
-            const host = new URL(effectiveUrl).hostname
-            if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
-          } catch { }
+
+        const prevUrl = tabsRef.current.find((t) => t.id === id)?.url
+        if (prevUrl === effectiveUrl) return
+        if (
+          prevUrl &&
+          prevUrl !== effectiveUrl &&
+          prevUrl !== 'about:blank' &&
+          effectiveUrl !== 'about:blank'
+        ) {
+          simplifyEpochRef.current += 1
         }
 
+        const favicon = effectiveUrl !== 'about:blank' ? faviconForUrl(effectiveUrl) : ''
+
         setTabs((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, url: effectiveUrl, favicon: favicon || t.favicon } : t))
+          prev.map((t) =>
+            t.id === id ? { ...t, url: effectiveUrl, favicon: favicon || t.favicon } : t
+          )
         )
         if (activeIdRef.current === id) {
           setNavUrl(effectiveUrl === 'about:blank' ? '' : effectiveUrl)
@@ -504,7 +438,28 @@ export function App() {
           if (!historyMapRef.current[id]) historyMapRef.current[id] = []
           const arr = historyMapRef.current[id]
           if (arr[arr.length - 1] !== effectiveUrl) arr.push(effectiveUrl)
-          recordHistory(effectiveUrl, tabsRef.current.find((t) => t.id === id)?.title || '', favicon)
+        }
+      }
+
+      const urlFromNavEvent = (e: any): string => {
+        if (e && typeof e.url === 'string' && e.url) return e.url
+        try {
+          return w.getURL() || ''
+        } catch {
+          return ''
+        }
+      }
+
+      const updUrlFromNav = (e: any) => {
+        if (e && e.isMainFrame === false) return
+        commitDisplayUrl(urlFromNavEvent(e))
+      }
+
+      const syncUrlFromWebview = () => {
+        try {
+          commitDisplayUrl(w.getURL() || '')
+        } catch {
+          //
         }
       }
 
@@ -512,8 +467,6 @@ export function App() {
         setTabs((prev) =>
           prev.map((t) => (t.id === id ? { ...t, title: title || t.title } : t))
         )
-        const u = tabsRef.current.find((t) => t.id === id)?.url
-        if (u) recordHistory(u, title)
       }
       
       const onFavicon = (_e: any, favicons: string[]) => {
@@ -525,6 +478,7 @@ export function App() {
       }
 
       const onLoad = async () => {
+        syncUrlFromWebview()
         await injectAssist(w)
         await applyFocusVisual(w, focusModeEnabledRef.current)
         const tid = id
@@ -544,18 +498,16 @@ export function App() {
         
         if (pageUrl && !pageUrl.startsWith('about:')) {
           if (lastInferredRef.current.get(tid) !== pageUrl) {
+            lastInferredRef.current.set(tid, pageUrl)
             setContextLoading(p => ({ ...p, [tid]: true }))
-            const fullHist = historyMapRef.current[tid] || []
-            const priorHist = fullHist.filter((u) => u !== pageUrl)
+            const hist = historyMapRef.current[tid] || []
             try {
-              const summary = await window.cclearBrowser.ai.inferContext(pageUrl, w.getTitle(), priorHist)
+              const summary = await window.cclearBrowser.ai.inferContext(pageUrl, w.getTitle(), hist)
               setTabContexts(p => {
                 const prevArr = p[tid] || []
                 return { ...p, [tid]: [...prevArr, summary].slice(-10) }
               })
-              lastInferredRef.current.set(tid, pageUrl)
             } catch {
-              lastInferredRef.current.delete(tid)
             } finally {
               setContextLoading(p => ({ ...p, [tid]: false }))
             }
@@ -574,23 +526,12 @@ export function App() {
       
       w.addEventListener('did-navigate', updUrlFromNav as any)
       w.addEventListener('did-navigate-in-page', updUrlFromNav as any)
+      w.addEventListener('did-stop-loading', syncUrlFromWebview as any)
       w.addEventListener('did-finish-load', onLoad)
       w.addEventListener('page-title-updated', onTitle as any)
       w.addEventListener('page-favicon-updated', onFavicon as any)
-      w.addEventListener('did-start-loading', () => {
-        setLoadingById((p) => ({ ...p, [id]: true }))
-      })
-      w.addEventListener('did-stop-loading', () => {
-        setLoadingById((p) => ({ ...p, [id]: false }))
-      })
-      w.addEventListener('found-in-page', ((e: any) => {
-        const r = e.result
-        if (!r) return
-        setFindActive(r.activeMatchOrdinal ?? 0)
-        setFindCount(r.matches ?? 0)
-      }) as any)
     },
-    [injectAssist, recordHistory]
+    [injectAssist]
   )
 
   useEffect(() => {
@@ -612,7 +553,17 @@ export function App() {
   )
 
   function goNavigate() {
-    applyUrlToTab(activeId, navUrl)
+    const nextUrl = normalizeUrl(navUrl)
+    setNavUrl(nextUrl)
+    const favicon = faviconForUrl(nextUrl)
+
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeId
+          ? { ...t, url: nextUrl, src: nextUrl, title: t.title, favicon: favicon || t.favicon }
+          : t
+      )
+    )
   }
 
   function goBack() {
@@ -632,6 +583,8 @@ export function App() {
   }
 
   function reload() {
+    simplifyEpochRef.current += 1
+    invalidateSimplifyStateForTab(activeId)
     try {
       webviewRefs.current[activeId]?.reload()
     } catch {
@@ -639,250 +592,116 @@ export function App() {
     }
   }
 
-  function stopLoad() {
-    try {
-      webviewRefs.current[activeId]?.stop()
-    } catch {
-      //
-    }
-  }
-
   function newTab() {
     const id = String(crypto.randomUUID())
-    setTabs((t) => [...t, { id, url: 'about:blank', title: '' }])
+    setTabs((t) => [...t, { id, url: 'about:blank', src: 'about:blank', title: '' }])
     setActiveId(id)
-  }
-
-  function insertTabAfter(afterId: string, tab: UITab) {
-    setTabs((prev) => {
-      const idx = prev.findIndex((t) => t.id === afterId)
-      if (idx < 0) return [...prev, tab]
-      return [...prev.slice(0, idx + 1), tab, ...prev.slice(idx + 1)]
-    })
-    setActiveId(tab.id)
-  }
-
-  function closeTabs(ids: string[]) {
-    const currentTabs = tabsRef.current
-    const drop = new Set(ids.filter((id) => currentTabs.some((t) => t.id === id)))
-    let remaining = currentTabs.filter((t) => !drop.has(t.id))
-    if (remaining.length === 0 && currentTabs[0]) {
-      drop.delete(currentTabs[0].id)
-      remaining = [currentTabs[0]]
-    }
-    if (drop.size === 0) return
-
-    for (const t of currentTabs) {
-      if (!drop.has(t.id)) continue
-      void window.cclearBrowser.session.pushClosed({
-        id: t.id,
-        url: t.url,
-        title: t.title,
-        pinned: t.pinned,
-        muted: t.muted
-      })
-      delete webviewRefs.current[t.id]
-      delete historyMapRef.current[t.id]
-      lastInferredRef.current.delete(t.id)
-      invalidateSimplifyStateForTab(t.id)
-    }
-
-    setTabContexts((p) => {
-      const n = { ...p }
-      for (const id of drop) delete n[id]
-      return n
-    })
-    setContextLoading((p) => {
-      const n = { ...p }
-      for (const id of drop) delete n[id]
-      return n
-    })
-
-    let nextActive = activeIdRef.current
-    if (drop.has(nextActive)) {
-      const idx = currentTabs.findIndex((t) => t.id === nextActive)
-      nextActive = currentTabs.slice(0, idx).reverse().find((t) => !drop.has(t.id))?.id
-        ?? remaining[0]?.id
-        ?? nextActive
-    }
-    setTabs(remaining)
-    setActiveId(nextActive)
   }
 
   function closeTab(idToClose: string) {
-    closeTabs([idToClose])
-  }
-
-  async function reopenClosedTab() {
-    const { tab } = await window.cclearBrowser.session.popClosed()
-    if (!tab) return
-    const id = String(crypto.randomUUID())
-    setTabs((t) => [
-      ...t,
-      { id, url: tab.url, title: tab.title, pinned: tab.pinned, muted: tab.muted }
-    ])
-    setActiveId(id)
-  }
-
-  function duplicateTab(id: string) {
-    const src = tabsRef.current.find((t) => t.id === id)
-    if (!src) return
-    insertTabAfter(id, {
-      id: String(crypto.randomUUID()),
-      url: src.url,
-      title: src.title,
-      favicon: src.favicon
-    })
-  }
-
-  function newTabRight(id: string) {
-    insertTabAfter(id, { id: String(crypto.randomUUID()), url: 'about:blank', title: '' })
-  }
-
-  function togglePin(id: string) {
-    setTabs((prev) => {
-      const tab = prev.find((t) => t.id === id)
-      if (!tab) return prev
-      const updated = { ...tab, pinned: !tab.pinned }
-      const others = prev.filter((t) => t.id !== id)
-      if (updated.pinned) {
-        const pinCount = others.filter((t) => t.pinned).length
-        return [...others.slice(0, pinCount), updated, ...others.slice(pinCount)]
-      }
-      const firstUnpinned = others.findIndex((t) => !t.pinned)
-      const at = firstUnpinned < 0 ? others.length : firstUnpinned
-      return [...others.slice(0, at), updated, ...others.slice(at)]
-    })
-  }
-
-  function toggleMute(id: string) {
-    const tab = tabsRef.current.find((t) => t.id === id)
-    const next = !tab?.muted
-    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, muted: next } : t)))
-    try {
-      webviewRefs.current[id]?.setAudioMuted(next)
-    } catch {
-      //
-    }
-  }
-
-  function closeOthers(id: string) {
-    closeTabs(tabsRef.current.filter((t) => t.id !== id && !t.pinned).map((t) => t.id))
-  }
-
-  function closeToRight(id: string) {
-    const idx = tabsRef.current.findIndex((t) => t.id === id)
+    if (tabs.length <= 1) return
+    const idx = tabs.findIndex((t) => t.id === idToClose)
     if (idx < 0) return
-    closeTabs(
-      tabsRef.current
-        .slice(idx + 1)
-        .filter((t) => !t.pinned)
-        .map((t) => t.id)
-    )
-  }
 
-  function copyTabUrl(id: string) {
-    const tab = tabsRef.current.find((t) => t.id === id)
-    if (!tab?.url) return
-    void navigator.clipboard.writeText(tab.url).catch(() => {})
-  }
+    delete webviewRefs.current[idToClose]
+    delete historyMapRef.current[idToClose]
+    invalidateSimplifyStateForTab(idToClose)
 
-  async function bookmarkActivePage() {
-    const tab = tabsRef.current.find((t) => t.id === activeIdRef.current)
-    if (!tab || isInternalUrl(tab.url)) return
-    const existing = bookmarks.find((b) => b.type === 'url' && b.url === tab.url)
-    if (existing) {
-      await window.cclearBrowser.bookmarks.remove(existing.id)
-    } else {
-      await window.cclearBrowser.bookmarks.add({
-        type: 'url',
-        title: tab.title || tab.url,
-        url: tab.url,
-        parentId: null
-      })
+    // Clean up context state for the closed tab
+    setTabContexts(p => { const n = { ...p }; delete n[idToClose]; return n })
+    setContextLoading(p => { const n = { ...p }; delete n[idToClose]; return n })
+
+    const filtered = tabs.filter((t) => t.id !== idToClose)
+
+    let nextActive = activeId
+    if (activeId === idToClose) {
+      nextActive = tabs[idx - 1]?.id ?? filtered[0]?.id ?? activeId
     }
-    refreshBookmarks()
-  }
 
-  function runFind(forward: boolean) {
-    const w = webviewRefs.current[activeIdRef.current]
-    if (!w || !findQuery.trim()) return
-    try {
-      w.findInPage(findQuery, { forward, findNext: true })
-    } catch {
-      //
-    }
-  }
-
-  function openFind() {
-    setFindOpen(true)
-    const w = webviewRefs.current[activeIdRef.current]
-    if (w && findQuery.trim()) {
-      try {
-        w.findInPage(findQuery)
-      } catch {
-        //
-      }
-    }
-  }
-
-  function closeFind() {
-    setFindOpen(false)
-    setFindActive(0)
-    setFindCount(0)
-    try {
-      webviewRefs.current[activeIdRef.current]?.stopFindInPage('clearSelection')
-    } catch {
-      //
-    }
-  }
-
-  function printActive() {
-    try {
-      webviewRefs.current[activeIdRef.current]?.print()
-    } catch {
-      //
-    }
+    setTabs(filtered)
+    setActiveId(nextActive)
   }
 
   const handleSendChat = async (override?: string) => {
     const txt = String(override ?? chatInput ?? '').trim()
     if (!txt || chatSending) return
     setChatSending(true)
+    setChatThink('')
+    setChatDraft('')
     const nextMsgs: ChatMessage[] = [...chatMsgs, { role: 'user', content: txt }]
     setChatMsgs(nextMsgs)
     if (!override) setChatInput('')
     try {
-      // Grab screen text and optional screenshot for vision
-      let screenText = ''
-      let screenImageBase64: string | undefined
       const activeWv = webviewRefs.current[activeIdRef.current]
-      const activeTab = tabsRef.current.find((t) => t.id === activeIdRef.current)
-      const isBlankTab = !activeTab?.url || activeTab.url === 'about:blank'
+      let pageUrl = ''
+      try { pageUrl = activeWv?.getURL?.() || '' } catch { pageUrl = '' }
 
-      if (activeWv) {
-        try {
-          screenText = await activeWv.executeJavaScript('document.body.innerText.substring(0, 3000)', true)
-        } catch {}
-
-        if (needsScreenVision(txt) && !isBlankTab) {
-          try {
-            const image = await activeWv.capturePage()
-            const size = image.getSize()
-            const maxW = 1280
-            const resized = size.width > maxW ? image.resize({ width: maxW }) : image
-            screenImageBase64 = resized.toPNG().toString('base64')
-          } catch {}
+      const runPageMark = async (intent: PageActionIntent) => {
+        if (!activeWv || intent.kind === 'none') return { count: 0, scrolled: false }
+        await injectAssist(activeWv)
+        if (intent.kind === 'clear') {
+          return activeWv.executeJavaScript(getPageMarkScript({ mode: 'clear' }), true)
+        }
+        setChatDraft('Finding matching passages…')
+        const snapshot: PagePassageSnapshot = await activeWv.executeJavaScript(getPagePassagesScript(), true)
+        const selection = await window.cclearBrowser.ai.selectPagePassages(intent.query, snapshot)
+        const selectedIds = new Set(selection.ids)
+        const raw = await activeWv.executeJavaScript(getPageMarkScript({
+          mode: intent.kind,
+          url: snapshot.url,
+          passages: snapshot.passages.filter((p) => selectedIds.has(p.id))
+        }), true)
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+        return {
+          count: Number(parsed?.count || 0), scrolled: Boolean(parsed?.scrolled),
+          stale: Boolean(parsed?.stale), usedFallback: selection.usedFallback
         }
       }
 
-      const assistant = await window.cclearBrowser.ai.chat(
-        nextMsgs.slice(-16),
-        tabContextItems,
-        activeId,
-        screenText,
-        screenImageBase64
-      )
+      const pageAct = detectPageActionIntent(txt)
+      if (pageAct.kind !== 'none') {
+        if (!activeWv || /^about:/i.test(pageUrl)) {
+          setChatMsgs([...nextMsgs, { role: 'assistant', content: 'Open a page first, then I can mark or scroll on it.' }])
+          return
+        }
+        const result = await runPageMark(pageAct)
+        setChatMsgs([...nextMsgs, { role: 'assistant', content: pageActionSay(pageAct, result) }])
+        return
+      }
+
+      // Grab screen text if a webview is active
+      let screenText = ''
+      if (activeWv) {
+        try {
+          const raw = await activeWv.executeJavaScript(
+            `(() => {
+              const title = document.title || '';
+              const href = String(location.href || '');
+              if (!href || href === 'about:blank') return JSON.stringify({ title, href, text: '' });
+              const main = document.querySelector('#mw-content-text .mw-parser-output, #mw-content-text, article, main, [role="main"]');
+              const rawText = String((main && (main.innerText || main.textContent)) || (document.body && (document.body.innerText || document.body.textContent)) || '');
+              const text = rawText.replace(/\\s+/g, ' ').trim().slice(0, 1600);
+              return JSON.stringify({ title, href, text });
+            })()`,
+            true
+          )
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+          const title = String(parsed?.title || '')
+          const href = String(parsed?.href || pageUrl || '')
+          const text = String(parsed?.text || '')
+          screenText = text ? `TITLE: ${title}\nURL: ${href}\nTEXT: ${text}` : ''
+        } catch {
+          //
+        }
+      }
+
+      const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId, screenText)
+
+      const taggedAct = parsePageActionTags(assistant)
+      let pageActionMessage = ''
+      if (taggedAct.kind !== 'none' && activeWv && !/^about:/i.test(pageUrl)) {
+        pageActionMessage = pageActionSay(taggedAct, await runPageMark(taggedAct))
+      }
       
       // Execute AI actions
       if (assistant.includes('[GOTO:')) {
@@ -891,14 +710,14 @@ export function App() {
           const url = normalizeUrl(m[1].trim())
           const aid = activeIdRef.current
           setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
         }
       }
       if (assistant.includes('[NEW_TAB')) {
         const m = assistant.match(/\[NEW_TAB:?\s*([\s\S]*?)\]/i)
         const url = (m && m[1].trim()) ? normalizeUrl(m[1].trim()) : 'about:blank'
         const id = String(crypto.randomUUID())
-        setTabs(t => [...t, { id, url, title: '' }])
+        setTabs(t => [...t, { id, url, src: url, title: '' }])
         setActiveId(id)
       }
       if (assistant.includes('[BACK]')) goBack()
@@ -912,7 +731,7 @@ export function App() {
           const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`
           const aid = activeIdRef.current
           setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
         }
       }
 
@@ -923,7 +742,7 @@ export function App() {
           const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
           const aid = activeIdRef.current
           setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, title: '' } : t))
+          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
           
           // Auto-click the first video after load
           setTimeout(() => {
@@ -1013,14 +832,18 @@ export function App() {
         .replace(/\[FORWARD\]/gi, '')
         .replace(/\[RELOAD\]/gi, '')
         .replace(/\[SEARCH:[\s\S]*?\]/gi, '')
-        .replace(/\[WEB_LOOKUP:[\s\S]*?\]/gi, '')
         .replace(/\[PLAY_YOUTUBE:[\s\S]*?\]/gi, '')
         .replace(/\[CLICK:[\s\S]*?\]/gi, '')
         .replace(/\[TYPE:[\s\S]*?\]/gi, '')
+        .replace(/\[HIGHLIGHT:[\s\S]*?\]/gi, '')
+        .replace(/\[UNDERLINE:[\s\S]*?\]/gi, '')
+        .replace(/\[BOLD:[\s\S]*?\]/gi, '')
+        .replace(/\[SCROLL:[\s\S]*?\]/gi, '')
+        .replace(/\[CLEAR_MARKS\]/gi, '')
         .trim()
 
       const hasTags = assistant.includes('[') && assistant.includes(']')
-      const finalMsg = displayMsg ? displayMsg : (hasTags ? "Action completed." : assistant)
+      const finalMsg = pageActionMessage || (displayMsg ? displayMsg : (hasTags ? "Action completed." : assistant))
 
       setChatMsgs([...nextMsgs, { role: 'assistant', content: finalMsg }])
     } catch (e) {
@@ -1028,6 +851,8 @@ export function App() {
       setChatMsgs([...nextMsgs, { role: 'assistant', content: `Assistant error:\n${msg}` }])
     } finally {
       setChatSending(false)
+      setChatThink('')
+      setChatDraft('')
     }
   }
 
@@ -1056,86 +881,13 @@ export function App() {
   }, [tabUrlsKey, tabs.length])
 
   useEffect(() => {
-    for (const t of tabs) {
-      const w = webviewRefs.current[t.id]
-      if (!w) continue
-      try {
-        w.setAudioMuted(!!t.muted)
-      } catch {
-        //
-      }
-    }
-  }, [tabs])
-
-  useEffect(() => {
-    if (!sessionReady) return
-    const timer = window.setTimeout(() => {
-      void window.cclearBrowser.session.save({
-        tabs: tabsRef.current.map((t) => ({
-          id: t.id,
-          url: t.url,
-          title: t.title,
-          pinned: t.pinned,
-          muted: t.muted
-        })),
-        activeId: activeIdRef.current
-      })
-    }, 400)
-    return () => window.clearTimeout(timer)
-  }, [tabs, activeId, sessionReady])
-
-  useEffect(() => {
-    return window.cclearBrowser.downloads.onChanged((items) => {
-      const active = items.find((d) => d.state === 'progressing')
-      if (active) setDownloadToast(`Downloading ${active.filename}`)
-      else if (items[0]?.state === 'completed') {
-        setDownloadToast(`Downloaded ${items[0].filename}`)
-        window.setTimeout(() => setDownloadToast(null), 4000)
-      }
+    const api = window.cclearBrowser.ai
+    if (!api.onChatProgress) return
+    return api.onChatProgress((payload) => {
+      setChatThink(payload.think || '')
+      setChatDraft(payload.content || '')
     })
   }, [])
-
-  useEffect(() => {
-    if (!findOpen) return
-    const w = webviewRefs.current[activeId]
-    if (!w) return
-    if (!findQuery.trim()) {
-      try {
-        w.stopFindInPage('clearSelection')
-      } catch { /* */ }
-      setFindCount(0)
-      setFindActive(0)
-      return
-    }
-    try {
-      w.findInPage(findQuery)
-    } catch { /* */ }
-  }, [findQuery, findOpen, activeId])
-
-  const actionsRef = useRef({
-    closeTab,
-    newTab,
-    reopenClosedTab,
-    bookmarkActivePage,
-    persistFocusMode,
-    openUrl,
-    openFind,
-    closeFind,
-    printActive,
-    persistPrefs
-  })
-  actionsRef.current = {
-    closeTab,
-    newTab,
-    reopenClosedTab,
-    bookmarkActivePage,
-    persistFocusMode,
-    openUrl,
-    openFind,
-    closeFind,
-    printActive,
-    persistPrefs
-  }
 
   // Keyboard shortcuts from native menu
   useEffect(() => {
@@ -1145,15 +897,27 @@ export function App() {
       const w = webviewRefs.current[currentActiveId]
 
       switch (action) {
-        case 'new-tab':
-          actionsRef.current.newTab()
+        case 'new-tab': {
+          const id = String(crypto.randomUUID())
+          setTabs((t) => [...t, { id, url: 'about:blank', src: 'about:blank', title: '' }])
+          setActiveId(id)
           break
-        case 'close-tab':
-          actionsRef.current.closeTab(currentActiveId)
+        }
+        case 'close-tab': {
+          if (currentTabs.length <= 1) break
+          const idx = currentTabs.findIndex((t) => t.id === currentActiveId)
+          if (idx < 0) break
+          delete webviewRefs.current[currentActiveId]
+          delete historyMapRef.current[currentActiveId]
+          invalidateSimplifyStateForTab(currentActiveId)
+          setTabContexts(p => { const n = { ...p }; delete n[currentActiveId]; return n })
+          setContextLoading(p => { const n = { ...p }; delete n[currentActiveId]; return n })
+          const filtered = currentTabs.filter((t) => t.id !== currentActiveId)
+          const nextActive = currentTabs[idx - 1]?.id ?? filtered[0]?.id ?? currentActiveId
+          setTabs(filtered)
+          setActiveId(nextActive)
           break
-        case 'reopen-tab':
-          void actionsRef.current.reopenClosedTab()
-          break
+        }
         case 'focus-address': {
           const input = document.querySelector('.addrInput') as HTMLInputElement
           if (input) {
@@ -1163,13 +927,14 @@ export function App() {
           break
         }
         case 'reload':
+          simplifyEpochRef.current += 1
+          invalidateSimplifyStateForTab(currentActiveId)
           try { w?.reload() } catch {}
           break
         case 'hard-reload':
+          simplifyEpochRef.current += 1
+          invalidateSimplifyStateForTab(currentActiveId)
           try { w?.reloadIgnoringCache() } catch {}
-          break
-        case 'stop':
-          try { w?.stop() } catch {}
           break
         case 'zoom-in':
           try { if (w) w.setZoomFactor(Math.min(w.getZoomFactor() + 0.1, 3.0)) } catch {}
@@ -1181,7 +946,7 @@ export function App() {
           try { if (w) w.setZoomFactor(1.0) } catch {}
           break
         case 'toggle-focus':
-          void actionsRef.current.persistFocusMode(!focusModeEnabledRef.current)
+          void persistFocusModeRef.current(!focusModeEnabledRef.current)
           break
         case 'toggle-sidebar':
           setSidebarOpen(prev => !prev)
@@ -1191,33 +956,6 @@ export function App() {
           break
         case 'go-forward':
           try { w?.goForward() } catch {}
-          break
-        case 'go-home':
-          actionsRef.current.openUrl(prefsRef.current.homepage)
-          break
-        case 'find':
-          actionsRef.current.openFind()
-          break
-        case 'print':
-          actionsRef.current.printActive()
-          break
-        case 'bookmark-page':
-          void actionsRef.current.bookmarkActivePage()
-          break
-        case 'toggle-bookmarks-bar':
-          void actionsRef.current.persistPrefs({ showBookmarksBar: !prefsRef.current.showBookmarksBar })
-          break
-        case 'open-bookmarks':
-          actionsRef.current.openUrl(CHROME_PAGES.bookmarks)
-          break
-        case 'open-history':
-          actionsRef.current.openUrl(CHROME_PAGES.history)
-          break
-        case 'open-downloads':
-          actionsRef.current.openUrl(CHROME_PAGES.downloads)
-          break
-        case 'open-settings':
-          actionsRef.current.openUrl(CHROME_PAGES.settings)
           break
         case 'next-tab': {
           if (currentTabs.length > 1) {
@@ -1259,84 +997,38 @@ export function App() {
   }, [tabUrlsKey])
 
   return (
-    <div className="appShell" data-platform={navigator.platform.startsWith('Mac') ? 'darwin' : 'other'}>
+    <div className="appShell">
       <div className="chrome">
-        <TabStrip
-          tabs={tabs}
-          activeId={activeId}
-          setActiveId={setActiveId}
-          onClose={closeTab}
-          onNewTab={newTab}
-          onNewTabRight={newTabRight}
-          onDuplicate={duplicateTab}
-          onTogglePin={togglePin}
-          onToggleMute={toggleMute}
-          onCloseOthers={closeOthers}
-          onCloseToRight={closeToRight}
-          onCopyUrl={copyTabUrl}
-          onReopenClosed={() => void reopenClosedTab()}
-        />
+        <TabStrip tabs={tabs} activeId={activeId} setActiveId={setActiveId} onClose={(id) => closeTab(id)} onNewTab={newTab} />
         <TopBar
           navUrl={navUrl}
           setNavUrl={setNavUrl}
-          pageTitle={activeTab?.title || ''}
           onGoUrl={goNavigate}
           onBack={goBack}
           onForward={goForward}
           onReload={reload}
-          onStop={stopLoad}
-          onHome={() => openUrl(prefs.homepage)}
-          onOpenSettings={() => openUrl(CHROME_PAGES.settings)}
-          loading={!!loadingById[activeId]}
-          bookmarks={bookmarks}
-          onBookmarksChange={refreshBookmarks}
           focusModeEnabled={focusModeEnabled}
           setFocusModeEnabled={(v) => {
             void persistFocusMode(typeof v === 'function' ? v(focusModeEnabled) : v)
           }}
           simplifyBusy={simplifyBusy}
         />
-        <BookmarksBar
-          bookmarks={bookmarks}
-          visible={
-            prefs.showBookmarksBar &&
-            !(
-              (!activeTab?.url || activeTab.url === 'about:blank') &&
-              bookmarks.filter((b) => b.parentId == null).length === 0
-            )
-          }
-          onOpen={(url) => openUrl(url)}
-          onOpenManager={() => openUrl(CHROME_PAGES.bookmarks)}
-          onChange={refreshBookmarks}
-        />
         <WebviewHost
           recentHistory={recentHistory}
           tabs={tabs}
           activeId={activeId}
           setWebviewRef={(id, el) => setWebviewRef(id, el)}
-          onNavigate={(url) => openUrl(url)}
-          onOpen={(url, newTabFlag) => openUrl(url, newTabFlag)}
-          bookmarks={bookmarks}
-          onBookmarksChange={refreshBookmarks}
-          prefs={prefs}
-          onPrefsChange={(patch) => void persistPrefs(patch)}
-          findOpen={findOpen}
-          findQuery={findQuery}
-          setFindQuery={setFindQuery}
-          findActive={findActive}
-          findCount={findCount}
-          onFind={runFind}
-          onFindClose={closeFind}
+          onNavigate={(url) => {
+            const normalized = normalizeUrl(url)
+            setNavUrl(normalized)
+            let favicon = ''
+            try {
+              const host = new URL(normalized).hostname
+              if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+            } catch { }
+            setTabs(prev => prev.map(t => t.id === activeId ? { ...t, url: normalized, src: normalized, title: '', favicon: favicon || t.favicon } : t))
+          }}
         />
-        {downloadToast && (
-          <button
-            type="button"
-            className="downloadToast"
-            onClick={() => openUrl(CHROME_PAGES.downloads)}
-          >
-            {downloadToast}
-          </button>
-        )}
       </div>
       <aside
         className="chatDrawer"
@@ -1371,6 +1063,8 @@ export function App() {
               input={chatInput}
               setInput={setChatInput}
               sending={chatSending}
+              thinking={chatThink}
+              draft={chatDraft}
               onSend={(o) => void handleSendChat(o)}
             />
           </div>
