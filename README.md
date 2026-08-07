@@ -3,22 +3,24 @@
 A macOS-friendly Electron wrapper around a minimalist browser chrome with:
 
 - Tabs and standard navigation controls
-- A right-side assistant panel using **local Ollama** (`qwen3:4b` by default; free, offline capable)
-- **Focus mode** automatically rewrites page blocks in small batches. It targets 50–75% of each block's words and checks that definitions, options, causes, numbers, and complete sentences survive. If the model is unavailable or a rewrite fails its checks, Focus preserves the source information; that fallback may exceed the target length.
+- A right-side assistant panel using **local Ollama** (`mistral:7b` by default; free, offline capable)
+- **Focus mode**: larger typography presets (toggle at the top) plus a **manual** **Simplify page** action while Focus mode is on (aggressive chunk summarization via the local model)
 - Lightweight reading typography styling injected into pages via a small stylesheet (baseline assist)
 
 ## Prerequisites
 
-1. Install [Ollama](https://ollama.com) and pull the model:
+1. Install [Ollama](https://ollama.com) and pull the models:
 
 ```bash
-ollama pull qwen3:4b
+ollama pull mistral:7b
+ollama pull llava:latest   # screen vision (optional but recommended)
 ```
 
 2. Optionally set these environment variables:
 
 - `CCLEAR_OLLAMA_HOST` defaults to `http://127.0.0.1:11434`
-- `CCLEAR_OLLAMA_MODEL` defaults to `qwen3:4b`
+- `CCLEAR_OLLAMA_MODEL` defaults to `mistral:7b`
+- `CCLEAR_OLLAMA_VISION_MODEL` defaults to `llava:latest`
 
 ## Development
 
