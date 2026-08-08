@@ -11,14 +11,17 @@ import { WhyAmIHereBox } from './components/WhyAmIHereBox'
 import {
   buildApplySummariesScript,
   buildRestoreSummariesScript,
+  focusSimplifyCacheKey,
   getExtractChunksScript,
-  pageBlocksToSimplifyChunks
+  pageBlocksToSimplifyChunks,
+  sameFocusSimplifyPage
 } from '../focus/simplify'
 import { selectBlocksForSimplify } from '../focus/blockFilters'
 import { getInjectReadingAssistScript, getSetFocusVisualScript } from '../focus/injector'
 import { detectPageActionIntent, pageActionSay, parsePageActionTags, type PageActionIntent } from '../ai/pageActions'
 import { getPageMarkScript, getPagePassagesScript } from '../focus/pageMarks'
 import type { PagePassageSnapshot } from '../ai/pageActions'
+import { needsScreenVision } from '../ai/screenVision'
 
 const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
@@ -120,7 +123,7 @@ export function App() {
   const [contextLoading, setContextLoading] = useState<Record<string, boolean>>({})
   const historyMapRef = useRef<Record<string, string[]>>({})
 
-  /** Last simplified payloads per `${tabId}|url` for instant re-apply */
+  /** Last simplified payloads per tab+URL. Kept until reload or tab close so Focus off/on is instant. */
   const simplifyApplyCacheRef = useRef<Map<string, ApplySummaryItem[]>>(new Map())
   /** Serial queue so no request is dropped while another tab or navigation is in flight */
   const simplifyChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -130,13 +133,17 @@ export function App() {
   const persistFocusModeRef = useRef<(next: boolean) => Promise<void>>(async () => {})
 
   function simplifyCacheKey(tabId: string, url: string): string {
-    return `${tabId}|v7|${url || 'about:blank'}`
+    return focusSimplifyCacheKey(tabId, url)
   }
 
   function invalidateSimplifyStateForTab(tabId: string) {
     for (const k of [...simplifyApplyCacheRef.current.keys()]) {
       if (k.startsWith(`${tabId}|`)) simplifyApplyCacheRef.current.delete(k)
     }
+  }
+
+  function hasSimplifyCache(tabId: string, url: string): boolean {
+    return (simplifyApplyCacheRef.current.get(simplifyCacheKey(tabId, url))?.length ?? 0) > 0
   }
 
   const invalidateSimplifyLatestRef = useRef(invalidateSimplifyStateForTab)
@@ -206,7 +213,7 @@ export function App() {
       }
       try {
         const now = w.getURL()
-        if (now && now !== trimmed && !/^about:/i.test(now)) return false
+        if (now && !/^about:/i.test(now) && !sameFocusSimplifyPage(now, trimmed)) return false
       } catch {
         //
       }
@@ -214,19 +221,6 @@ export function App() {
     }
 
     if (!stillCurrent()) return
-
-    await waitForWebviewQuiet(w)
-    if (!stillCurrent()) return
-
-    let liveUrl = trimmed
-    try {
-      liveUrl = w.getURL() || trimmed
-    } catch {
-      liveUrl = trimmed
-    }
-    if (liveUrl && liveUrl !== trimmed && !/^about:/i.test(liveUrl)) {
-      return
-    }
 
     let isSearch = false
     try {
@@ -245,11 +239,33 @@ export function App() {
 
     const cached = simplifyApplyCacheRef.current.get(cacheKey)
     if (cached && cached.length > 0) {
-      const appliedCount = (await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)) as number
-      if (appliedCount === cached.length) {
-        await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
-        return
+      try {
+        let appliedCount = (await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)) as number
+        if (appliedCount === 0) {
+          await waitForWebviewQuiet(w)
+          if (!stillCurrent()) return
+          appliedCount = (await w.executeJavaScript(buildApplySummariesScript(cached, isSearch), true)) as number
+        }
+        if (appliedCount > 0 && stillCurrent()) {
+          await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
+        }
+      } catch {
+        // Keep the first pass; do not generate a second rewrite for this page.
       }
+      return
+    }
+
+    await waitForWebviewQuiet(w)
+    if (!stillCurrent()) return
+
+    let liveUrl = trimmed
+    try {
+      liveUrl = w.getURL() || trimmed
+    } catch {
+      liveUrl = trimmed
+    }
+    if (liveUrl && !/^about:/i.test(liveUrl) && !sameFocusSimplifyPage(liveUrl, trimmed)) {
+      return
     }
     if (!stillCurrent()) return
 
@@ -286,7 +302,6 @@ export function App() {
     setSimplifyBusy(true)
     try {
       const out: ApplySummaryItem[] = []
-      let allSimplified = true
       for (let offset = 0; offset < chunks.length; offset += 3) {
         if (!stillCurrent()) return
         const res = await window.cclearBrowser.ai.simplifyChunks(chunks.slice(offset, offset + 3))
@@ -301,7 +316,6 @@ export function App() {
         }))
         await w.executeJavaScript(buildApplySummariesScript(batch, isSearch), true)
         out.push(...batch)
-        allSimplified &&= res.every((r) => r.status === 'simplified')
         if (!stillCurrent()) {
           try {
             await w.executeJavaScript(buildRestoreSummariesScript(), true)
@@ -311,7 +325,7 @@ export function App() {
           return
         }
       }
-      if (allSimplified) simplifyApplyCacheRef.current.set(cacheKey, out)
+      if (out.length > 0) simplifyApplyCacheRef.current.set(cacheKey, out)
       await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
     } catch (e) {
       console.warn('[cclear] focus simplify:', e instanceof Error ? e.message : e)
@@ -386,12 +400,14 @@ export function App() {
 
     if (!focusModeEnabled) return
 
+    const tid = activeIdRef.current
+    const url = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
+    const delay = hasSimplifyCache(tid, url) ? 0 : FOCUS_SIMPLIFY_DEBOUNCE_MS
+
     focusSimplifyScheduleRef.current = setTimeout(() => {
       focusSimplifyScheduleRef.current = null
-      const tid = activeIdRef.current
-      const url = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
       enqueueFocusAutoSimplify(tid, url)
-    }, FOCUS_SIMPLIFY_DEBOUNCE_MS)
+    }, delay)
 
     return () => {
       if (focusSimplifyScheduleRef.current) clearTimeout(focusSimplifyScheduleRef.current)
@@ -671,6 +687,9 @@ export function App() {
 
       // Grab screen text if a webview is active
       let screenText = ''
+      let screenImageBase64: string | undefined
+      const activeTab = tabsRef.current.find((t) => t.id === activeIdRef.current)
+      const isBlankTab = !activeTab?.url || activeTab.url === 'about:blank'
       if (activeWv) {
         try {
           const raw = await activeWv.executeJavaScript(
@@ -693,9 +712,26 @@ export function App() {
         } catch {
           //
         }
+        if (needsScreenVision(txt) && !isBlankTab) {
+          try {
+            const image = await activeWv.capturePage()
+            const size = image.getSize()
+            const maxW = 1280
+            const resized = size.width > maxW ? image.resize({ width: maxW }) : image
+            screenImageBase64 = resized.toPNG().toString('base64')
+          } catch {
+            //
+          }
+        }
       }
 
-      const assistant = await window.cclearBrowser.ai.chat(nextMsgs.slice(-16), tabContextItems, activeId, screenText)
+      const assistant = await window.cclearBrowser.ai.chat(
+        nextMsgs.slice(-16),
+        tabContextItems,
+        activeId,
+        screenText,
+        screenImageBase64
+      )
 
       const taggedAct = parsePageActionTags(assistant)
       let pageActionMessage = ''
