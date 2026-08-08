@@ -11,7 +11,13 @@ export type CCLEARApi = {
   ai: {
     selectPagePassages(query: string, snapshot: PagePassageSnapshot): Promise<PagePassageSelection>
     health(): Promise<AiHealth>
-    chat(messages: ChatMessage[], tabs: TabContextItem[], activeTabId?: string, screenText?: string): Promise<string>
+    chat(
+      messages: ChatMessage[],
+      tabs: TabContextItem[],
+      activeTabId?: string,
+      screenText?: string,
+      screenImageBase64?: string
+    ): Promise<string>
     onChatProgress(callback: (payload: { think: string; content: string }) => void): () => void
     simplifyChunks(chunks: SimplifyChunk[]): Promise<SimplifyResult[]>
     groupTabs(tabs: TabContextItem[]): Promise<TabGroupAssignment[]>
