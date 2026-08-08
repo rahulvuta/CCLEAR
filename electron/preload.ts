@@ -15,8 +15,10 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
       messages: ChatMessage[],
       tabs: TabContextItem[],
       activeTabId?: string,
-      screenText?: string
-    ): Promise<string> => ipcRenderer.invoke('ai:chat', { messages, tabs, activeTabId, screenText }),
+      screenText?: string,
+      screenImageBase64?: string
+    ): Promise<string> =>
+      ipcRenderer.invoke('ai:chat', { messages, tabs, activeTabId, screenText, screenImageBase64 }),
     onChatProgress: (callback: (payload: { think: string; content: string }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: { think: string; content: string }) => {
         callback(payload)
