@@ -102,18 +102,59 @@ export type ApplySummaryItem = {
   tagName?: string
 }
 
+/** Same page for Focus cache: ignore hash so address-bar vs load URL still match. */
+export function focusSimplifyPageUrl(url: string): string {
+  const t = (url || '').trim() || 'about:blank'
+  try {
+    const u = new URL(t)
+    u.hash = ''
+    return u.href
+  } catch {
+    return t
+  }
+}
+
+export function focusSimplifyCacheKey(tabId: string, url: string): string {
+  return `${tabId}|v8|${focusSimplifyPageUrl(url)}`
+}
+
+export function sameFocusSimplifyPage(a: string, b: string): boolean {
+  return focusSimplifyPageUrl(a) === focusSimplifyPageUrl(b)
+}
+
 export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = false): string {
   const payload = items.map((item) => ({
     id: item.id,
+    original: item.original ?? '',
+    tagName: item.tagName ?? '',
     __html: buildReplacementInnerHtml(item, '', isSearch),
   }))
   const json = JSON.stringify(payload)
   return `(() => {
     const payload = ${json};
+    function normText(t) {
+      return String(t || '').trim().replace(/\\s+/g, ' ');
+    }
+    function findByOriginal(item) {
+      const want = normText(item.original);
+      if (!want) return null;
+      const tag = String(item.tagName || '').toLowerCase();
+      const sel = /^[a-z][a-z0-9]*$/.test(tag)
+        ? tag
+        : 'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption';
+      const nodes = document.querySelectorAll(sel);
+      for (const el of Array.from(nodes)) {
+        if (el.getAttribute('data-cclear-simplified')) continue;
+        if (normText(el.innerText) === want) return el;
+      }
+      return null;
+    }
     let count = 0;
     for (const item of payload) {
-      const el = document.querySelector('[data-cclear-src-id="' + item.id + '"]');
+      let el = item.id ? document.querySelector('[data-cclear-src-id="' + item.id + '"]') : null;
+      if (!el) el = findByOriginal(item);
       if (!el) continue;
+      if (item.id) el.setAttribute('data-cclear-src-id', item.id);
       if (el.getAttribute('data-cclear-simplified')) {
         count++;
         continue;
