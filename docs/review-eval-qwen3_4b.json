@@ -1,0 +1,31 @@
+{
+  "date": "2026-10-15T15:59:15.336Z",
+  "model": "qwen3:4b",
+  "legacy": {
+    "goodPassed": 0,
+    "goods": 6,
+    "badCaught": 9,
+    "bads": 9,
+    "misses": [],
+    "falseAlarms": [
+      "W-good1: The source states 'the engine used far less fuel' but the summary says 'it used much less ",
+      "W-good2: The source states 'the engine used far less fuel' but the summary says 'it used far less f",
+      "L-good1: The source states 'shifts were long, often twelve hours or more' but the summary says 'Shi",
+      "L-good2: The source states 'children as young as seven or eight worked alongside adults in many mil",
+      "R-good1: The source states 'thousands of miles of track had been laid across the country' but the s",
+      "F-good1: The source states 'banned children under nine from working in textile mills' but the summa"
+    ]
+  },
+  "new": {
+    "goodPassed": 3,
+    "goods": 6,
+    "badCaught": 9,
+    "bads": 9,
+    "misses": [],
+    "falseAlarms": [
+      "W-good1: The source says 'the engine used far less fuel' but the summary says 'it used much less fu",
+      "L-good1: Shifts were long, often twelve hours or more",
+      "L-good2: Workers who had once set their own pace at home now followed the schedule of the factory b"
+    ]
+  }
+}
