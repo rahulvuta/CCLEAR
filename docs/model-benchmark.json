@@ -1,0 +1,125 @@
+{
+  "date": "2026-10-15T15:52:07.584Z",
+  "results": [
+    {
+      "model": "qwen3:4b",
+      "loadSec": 2,
+      "judge": {
+        "n": 29,
+        "valid": 100,
+        "accuracy": 100,
+        "falseOffRate": 0,
+        "missedOffRate": 0,
+        "p50ms": 646,
+        "p90ms": 701
+      },
+      "router": {
+        "n": 15,
+        "valid": 100,
+        "accuracy": 93,
+        "injectionActions": 0,
+        "p50ms": 971,
+        "p90ms": 1524
+      },
+      "ask": {
+        "n": 10,
+        "valid": 100,
+        "accuracy": 100,
+        "citationCorrect": 100,
+        "refusalOnUnanswerable": 100,
+        "p50ms": 1168,
+        "p90ms": 2328
+      }
+    },
+    {
+      "model": "qwen3:8b",
+      "loadSec": 3.9,
+      "judge": {
+        "n": 29,
+        "valid": 100,
+        "accuracy": 100,
+        "falseOffRate": 0,
+        "missedOffRate": 0,
+        "p50ms": 1306,
+        "p90ms": 1526
+      },
+      "router": {
+        "n": 15,
+        "valid": 100,
+        "accuracy": 100,
+        "injectionActions": 0,
+        "p50ms": 1839,
+        "p90ms": 2671
+      },
+      "ask": {
+        "n": 10,
+        "valid": 100,
+        "accuracy": 100,
+        "citationCorrect": 100,
+        "refusalOnUnanswerable": 100,
+        "p50ms": 2306,
+        "p90ms": 4782
+      }
+    },
+    {
+      "model": "llama3.2:latest",
+      "loadSec": 1.7,
+      "judge": {
+        "n": 29,
+        "valid": 100,
+        "accuracy": 86,
+        "falseOffRate": 25,
+        "missedOffRate": 0,
+        "p50ms": 606,
+        "p90ms": 653
+      },
+      "router": {
+        "n": 15,
+        "valid": 100,
+        "accuracy": 100,
+        "injectionActions": 0,
+        "p50ms": 698,
+        "p90ms": 894
+      },
+      "ask": {
+        "n": 10,
+        "valid": 100,
+        "accuracy": 100,
+        "citationCorrect": 100,
+        "refusalOnUnanswerable": 100,
+        "p50ms": 909,
+        "p90ms": 1830
+      }
+    },
+    {
+      "model": "mistral:7b",
+      "loadSec": 3,
+      "judge": {
+        "n": 29,
+        "valid": 100,
+        "accuracy": 86,
+        "falseOffRate": 25,
+        "missedOffRate": 0,
+        "p50ms": 1090,
+        "p90ms": 1422
+      },
+      "router": {
+        "n": 15,
+        "valid": 100,
+        "accuracy": 73,
+        "injectionActions": 0,
+        "p50ms": 2331,
+        "p90ms": 3193
+      },
+      "ask": {
+        "n": 10,
+        "valid": 100,
+        "accuracy": 100,
+        "citationCorrect": 100,
+        "refusalOnUnanswerable": 100,
+        "p50ms": 1976,
+        "p90ms": 4588
+      }
+    }
+  ]
+}
