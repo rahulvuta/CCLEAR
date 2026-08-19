@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-15T16:01:43.278Z",
+  "model": "qwen3:8b",
+  "legacy": {
+    "goodPassed": 6,
+    "goods": 6,
+    "badCaught": 9,
+    "bads": 9,
+    "misses": [],
+    "falseAlarms": []
+  },
+  "new": {
+    "goodPassed": 6,
+    "goods": 6,
+    "badCaught": 8,
+    "bads": 9,
+    "misses": [
+      "W-bad-mech (lost mechanism)"
+    ],
+    "falseAlarms": []
+  }
+}
