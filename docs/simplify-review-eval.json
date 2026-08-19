@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-15T16:07:23.771Z",
+  "model": "default",
+  "results": [
+    {
+      "config": "4b writes, 4b reviews (lenient)",
+      "seconds": 67.4,
+      "llmCalls": 16,
+      "simplified": "3/10",
+      "keyFactRecall": 100,
+      "numberViolations": 0,
+      "avgCompression": 72
+    },
+    {
+      "config": "4b writes, 8b reviews (strict)",
+      "seconds": 106,
+      "llmCalls": 16,
+      "simplified": "3/10",
+      "keyFactRecall": 100,
+      "numberViolations": 0,
+      "avgCompression": 72
+    },
+    {
+      "config": "4b writes, 8b reviews risky blocks only",
+      "seconds": 75.4,
+      "llmCalls": 14,
+      "simplified": "6/10",
+      "keyFactRecall": 95,
+      "numberViolations": 0,
+      "avgCompression": 65
+    },
+    {
+      "config": "4b writes, no review",
+      "seconds": 37.8,
+      "llmCalls": 8,
+      "simplified": "6/10",
+      "keyFactRecall": 95,
+      "numberViolations": 0,
+      "avgCompression": 65
+    }
+  ]
+}
