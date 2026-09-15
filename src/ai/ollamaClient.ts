@@ -1,5 +1,24 @@
 export const DEFAULT_MODEL = process.env.CCLEAR_OLLAMA_MODEL ?? 'qwen3:4b'
+
+/** The model every call uses unless it names another. Changed from Settings. */
+let activeModel = DEFAULT_MODEL
+export function setActiveModel(name: string) {
+  if (name.trim()) activeModel = name.trim()
+}
+export function getActiveModel(): string {
+  return activeModel
+}
 export const DEFAULT_VISION_MODEL = process.env.CCLEAR_OLLAMA_VISION_MODEL ?? 'llava:latest'
+/** Keep the model resident between requests so follow-ups skip the load time. */
+export const KEEP_ALIVE = process.env.CCLEAR_OLLAMA_KEEP_ALIVE ?? '30m'
+
+/** Abort `ctl` when an external signal fires (user pressed Cancel). */
+function linkSignal(ctl: AbortController, signal?: AbortSignal) {
+  if (!signal) return
+  if (signal.aborted) ctl.abort()
+  else signal.addEventListener('abort', () => ctl.abort(), { once: true })
+}
+
 export const DEFAULT_OLLAMA_HOST = process.env.CCLEAR_OLLAMA_HOST ?? 'http://127.0.0.1:11434'
 
 /** Qwen3 otherwise dumps a think trace that blows Focus timeouts and JSON parse. */
@@ -57,7 +76,7 @@ export async function ollamaChat(params: {
   temperature?: number
 }): Promise<string> {
   const host = params.host ?? DEFAULT_OLLAMA_HOST
-  const model = params.model ?? DEFAULT_MODEL
+  const model = params.model ?? activeModel
   const r = await fetch(`${host.replace(/\/$/, '')}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -88,12 +107,14 @@ export async function ollamaVisionChat(params: {
   imageBase64: string
   temperature?: number
   timeoutMs?: number
+  signal?: AbortSignal
 }): Promise<string> {
   const host = params.host ?? DEFAULT_OLLAMA_HOST
   const model = params.model ?? DEFAULT_VISION_MODEL
   const imageBase64 = stripDataUriPrefix(params.imageBase64.trim())
   const timeoutMs = params.timeoutMs ?? 90000
   const ctl = new AbortController()
+  linkSignal(ctl, params.signal)
   const abortTimer = setTimeout(() => ctl.abort(), timeoutMs)
 
   const messages: Array<{
@@ -120,6 +141,7 @@ export async function ollamaVisionChat(params: {
         model,
         messages,
         stream: false,
+        keep_alive: KEEP_ALIVE,
         options: {
           temperature: params.temperature ?? 0.2
         }
@@ -158,9 +180,10 @@ export async function ollamaGenerate(params: {
   directJson?: boolean
   /** Abort slow generations (defaults 30s; chat uses explicit longer timeout) */
   timeoutMs?: number
+  signal?: AbortSignal
 }): Promise<string> {
   const host = params.host ?? DEFAULT_OLLAMA_HOST
-  const model = params.model ?? DEFAULT_MODEL
+  const model = params.model ?? activeModel
   const options: Record<string, unknown> = {
     temperature: params.temperature ?? 0.35
   }
@@ -170,6 +193,7 @@ export async function ollamaGenerate(params: {
   if (params.numCtx) options.num_ctx = params.numCtx
   const timeoutMs = params.timeoutMs ?? 30000
   const ctl = new AbortController()
+  linkSignal(ctl, params.signal)
   const abortTimer = setTimeout(() => ctl.abort(), timeoutMs)
 
   // Some installed Qwen3 templates always end in <think>, even with think:false.
@@ -192,6 +216,7 @@ export async function ollamaGenerate(params: {
         raw: directQwen ? true : undefined,
         stream: false,
         think: false,
+        keep_alive: KEEP_ALIVE,
         format: params.format,
         options
       })
@@ -231,7 +256,7 @@ export async function ollamaGenerateStream(params: {
   onProgress?: (p: ChatGenProgress) => void
 }): Promise<ChatGenProgress> {
   const host = params.host ?? DEFAULT_OLLAMA_HOST
-  const model = params.model ?? DEFAULT_MODEL
+  const model = params.model ?? activeModel
   const options: Record<string, unknown> = {
     temperature: params.temperature ?? 0.2
   }
@@ -307,5 +332,21 @@ export async function ollamaGenerateStream(params: {
     throw e
   } finally {
     clearTimeout(abortTimer)
+  }
+}
+
+let modelsCache: { at: number; names: string[] } | null = null
+
+/** Installed model names (cached for a minute; empty if Ollama is unreachable). */
+export async function listInstalledModels(host = DEFAULT_OLLAMA_HOST): Promise<string[]> {
+  if (modelsCache && Date.now() - modelsCache.at < 60_000) return modelsCache.names
+  try {
+    const r = await fetch(`${host.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(2500) })
+    const data = (await r.json()) as { models?: Array<{ name: string }> }
+    const names = (data.models ?? []).map((m) => m.name)
+    modelsCache = { at: Date.now(), names }
+    return names
+  } catch {
+    return []
   }
 }
