@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSimplifier, rewriteIssues } from '../../src/ai/simplifyBlocks'
+import { createSimplifier, needsReview, pickReviewer, rewriteIssues } from '../../src/ai/simplifyBlocks'
 import { heuristicSummarizeParagraph, summaryWordRange } from '../../src/focus/heuristicSimplify'
 import { automotiveEngine } from '../fixtures/automotiveEngine'
 
@@ -91,5 +91,28 @@ describe('Focus rewrite pipeline', () => {
   it('never drops or invents numbers to meet a budget', () => {
     expect(rewriteIssues('In 2013, China had smaller research budgets than Europe and Japan.', 'China had smaller research budgets than Europe.')).toEqual(expect.arrayContaining([expect.stringContaining('Restore all source numbers')]))
     expect(rewriteIssues('The motor runs at a constant speed.', 'The motor runs at 45 mph.')).toEqual(expect.arrayContaining([expect.stringContaining('not present in the source')]))
+  })
+
+  describe('selective review mode (opt-in)', () => {
+    it('skips the review call for a simple, low-risk block that passed the hard checks', async () => {
+      const generate = vi.fn(async () => response('blocks', [{ id: 'a', summary: good }]))
+      const [result] = await createSimplifier(generate, { review: 'selective' })([{ id: 'a', text: source }])
+      expect(result.status).toBe('simplified')
+      expect(generate).toHaveBeenCalledTimes(1)
+    })
+    it('still reviews dense or cause-and-effect blocks', () => {
+      expect(needsReview('In 1769 Watt patented a condenser, and by 1800 over 450 engines were in use.', 'Watt patented a condenser.')).toBe(true)
+      expect(needsReview('The valve closes because pressure rises, which allows the piston to move, so that the wheel turns.', 'The valve closes and the wheel turns.')).toBe(true)
+      expect(needsReview(source, good)).toBe(false)
+      expect(needsReview(source, good, true)).toBe(true)
+    })
+  })
+
+  describe('pickReviewer', () => {
+    it('uses a stronger installed model with the strict checklist only when memory allows', () => {
+      expect(pickReviewer(['qwen3:4b', 'qwen3:8b'], 16)).toEqual({ model: 'qwen3:8b', strict: true })
+      expect(pickReviewer(['qwen3:4b', 'qwen3:8b'], 8)).toEqual({ strict: false })
+      expect(pickReviewer(['qwen3:4b'], 32)).toEqual({ strict: false })
+    })
   })
 })
