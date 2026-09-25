@@ -15,7 +15,30 @@ import {
 import { detectChatNavIntent, resolveChatNav } from '../../src/ai/chatAssist'
 import { selectPagePassages } from '../../src/ai/pagePassages'
 import type { PagePassageSnapshot } from '../../src/ai/pageActions'
-import { simplifyBlocks } from '../../src/ai/simplifyBlocks'
+import os from 'node:os'
+import { createSimplifier, pickReviewer } from '../../src/ai/simplifyBlocks'
+import { listInstalledModels } from '../../src/ai/ollamaClient'
+import { buildRouterSystem, parseRouterOutput, ROUTER_SCHEMA } from '../../src/ai/router'
+import { parseLegacyTags, proposeActions, stripLegacyTags, type ProposedAction, type ToolCall } from '../../src/ai/tools'
+import { extractUrlsFromLookup } from '../../src/ai/navigationSanitize'
+import { ASK_SCHEMA, buildAskPrompt, buildAskSystem, hasEvidence, parseAsk, rankPassages, type AskResult } from '../../src/ai/askPage'
+import { dropsNumericDetails } from '../../src/focus/heuristicSimplify'
+import { semanticScores } from '../../src/ai/embeddings'
+import { buildTabsPrompt, buildTabsSystem, parseTabsAnswer, pickExcerpts, TABS_SCHEMA, type TabText } from '../../src/ai/askTabs'
+
+export type AssistPayload = {
+  requestId: string
+  messages: ChatMessage[]
+  tabs: TabContextItem[]
+  activeTabId?: string
+  screenText?: string
+  screenImageBase64?: string
+  goal?: string
+}
+export type AssistResult = { text: string; actions: ProposedAction[] }
+
+/** In-flight assistant requests, so the UI can cancel them. */
+const inflight = new Map<string, AbortController>()
 
 const CHAT_TIMEOUT_MS = 45000
 
@@ -48,70 +71,11 @@ const INFER_CONTEXT_ERROR: TabContextSummary = {
   summary: 'Try again after the page finishes loading'
 }
 
-function buildNavigationContextSnippet(tabs: TabContextItem[], activeTabId?: string): string {
-  const lines = tabs.map((t) => {
-    const mark = t.isActive || t.id === activeTabId ? '(active)' : ''
-    return `- ${mark} Title: "${t.title}" URL: ${t.url}`
-  })
-  return lines.join('\n')
-}
-
 function getLastUserMessage(messages: ChatMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === 'user') return messages[i].content
   }
   return null
-}
-
-function buildChatSystemPrompt(
-  tabs: TabContextItem[],
-  activeTabId: string | undefined,
-  screenText: string | undefined,
-  lookupContext?: string
-): string {
-  const context = buildNavigationContextSnippet(tabs, activeTabId)
-  const activeScreen = screenText
-    ? `\nCURRENT SCREEN TEXT (What you currently see on the active tab):\n"""\n${screenText.substring(0, 3000)}\n"""\n`
-    : ''
-  const lookupBlock = lookupContext
-    ? `\nBACKGROUND WEB LOOKUP (already fetched — use this to answer factual/time-sensitive questions; do NOT mention searching):\n"""\n${lookupContext}\n"""\n`
-    : ''
-
-  return [
-    'You are CCLEAR Focus, an advanced, highly capable, and casually conversational AI agent built directly into the browser.',
-    'You act like a human assistant. You can chat casually, answer questions directly, retain conversational context, and deeply understand what the user wants to accomplish.',
-    'You ALSO have the ability to directly control the browser by including invisible action tags in your response. You can string them together to complete complex tasks.',
-    'ACTION TAGS:',
-    '- [GOTO: url] -> Navigate the current tab to the URL. ONLY use a URL that appears verbatim in BACKGROUND WEB LOOKUP — never invent URLs.',
-    '- [NEW_TAB: url] -> Open a new tab with the URL.',
-    '- [SEARCH: query] -> Search Google for a query (visible to user — opens Google in their tab). Prefer this when finding articles.',
-    '- [WEB_LOOKUP: query] -> Silently look up current information. User will NOT see this. Use for weather, news, scores, prices, or anything after your training cutoff.',
-    '- [CLICK: text] -> Click a button or link containing this exact text.',
-    '- [TYPE: label, text] -> Type text into an input field (e.g. [TYPE: search, how to make fried rice]). It auto-submits.',
-    '- [BACK] -> Go back in history.',
-    '- [FORWARD] -> Go forward.',
-    '- [RELOAD] -> Reload page.',
-    '- [PLAY_YOUTUBE: query] -> Instantly search for and play the top YouTube video for a query.',
-    '- [HIGHLIGHT: query] -> Highlight matching passages on the current page.',
-    '- [UNDERLINE: query] -> Underline matching passages on the current page.',
-    '- [BOLD: query] -> Bold matching passages on the current page.',
-    '- [SCROLL: query] -> Scroll to a matching passage on the current page.',
-    '- [CLEAR_MARKS] -> Clear page highlights, underlines, and bold marks.',
-    '',
-    'RULES:',
-    '1. If the user is just chatting (e.g. "Hello", "How are you"), reply normally without using any action tags.',
-    '2. If the user asks you to DO something in the browser (e.g. "play a video about cats", "find a tutorial", "go to wikipedia"), USE the browser action tags.',
-    '3. If the user asks a factual/time-sensitive question (weather, news, scores, current events), answer from BACKGROUND WEB LOOKUP if provided, or emit [WEB_LOOKUP: query]. Use [SEARCH:] or [GOTO:] only when the user also wants you to open a page or find an article — not for pure factual Q&A.',
-    '3b. When the user wants an article opened after research, give a brief factual answer only (1-2 sentences from lookup). Do NOT say you will open pages, find articles, or describe article contents. Navigation is automatic.',
-    '4. When using browser control tags (not WEB_LOOKUP), add ONE short confirmation sentence. Never write a second paragraph that talks to yourself (no "Let me find..." followed by "Sure, pulling up...").',
-    '5. You can see the user\'s open tabs and the actual text of the webpage they are looking at.',
-    '6. When the user asks about visual content on their screen, a screenshot may be analyzed — answer from what is visible.',
-    '7. When answering from lookup results, be concise and natural. Never mention that you searched the web.',
-    lookupBlock,
-    'OPEN TABS CONTEXT:',
-    context || '(no tabs)',
-    activeScreen
-  ].join('\n')
 }
 
 function buildLookupAnswerSystemPrompt(lookupContext: string): string {
@@ -165,6 +129,91 @@ function finalizeChatResponse(
   return finalizeNavigation(stripped, lookupContext, lastUser ?? '', options)
 }
 
+async function runAssist(
+  payload: AssistPayload,
+  signal: AbortSignal
+): Promise<{ text: string; calls: ToolCall[]; trustedUrls: string[] }> {
+  const lastUser = getLastUserMessage(payload.messages)
+  const lastUserEarly = lastUser ?? ''
+
+  // Deterministic "take me to X" resolver: its URLs come from Wikipedia/known sites, not the model.
+  const nav = await resolveChatNav(detectChatNavIntent(lastUserEarly))
+  if (nav) return { text: `${nav.say}\n${nav.actions}`, calls: [], trustedUrls: [nav.url] }
+
+  const health = await checkOllamaHealth()
+  if (!health.ok) {
+    throw new Error(`${health.error}\nTip: Install Ollama, run it, then: ollama pull ${DEFAULT_MODEL}`)
+  }
+  const prompt = payload.messages.map((m) => `${m.role}: ${m.content}`).join('\n')
+
+  const wantsVision = Boolean(lastUser && needsScreenVision(lastUser))
+  if (wantsVision && payload.screenImageBase64 && lastUser) {
+    const visionHealth = await checkVisionModelHealth()
+    if (visionHealth.ok) {
+      try {
+        const text = await ollamaVisionChat({
+          system:
+            'You are CCLEAR. Describe what you see on the browser screen and answer the user question. Be concise. Do not mention screenshots, images, or AI vision.',
+          userText: buildVisionPrompt(lastUser, payload.screenText),
+          imageBase64: payload.screenImageBase64,
+          temperature: 0.2,
+          timeoutMs: 90000,
+          signal
+        })
+        return { text, calls: [], trustedUrls: [] }
+      } catch (e) {
+        throw formatChatError(e)
+      }
+    }
+  }
+
+  let lookupContext = ''
+  if (lastUser && !wantsVision && needsWebLookup(lastUser)) {
+    lookupContext = await performWebLookup(refineLookupQuery(lastUser)).catch(() => '')
+  }
+
+  try {
+    if (lookupContext) {
+      const trustedUrls = extractUrlsFromLookup(lookupContext)
+      const hasAction = Boolean(lastUser && wantsBrowserAction(lastUser))
+      const lookupPrompt = lastUser ? buildLookupPrompt(payload.messages, lastUser) : prompt
+      const raw = await ollamaGenerate({
+        system: hasAction ? buildCompoundSummarySystemPrompt(lookupContext) : buildLookupAnswerSystemPrompt(lookupContext),
+        prompt: lookupPrompt,
+        temperature: 0.1,
+        numPredict: hasAction ? 100 : 200,
+        timeoutMs: CHAT_TIMEOUT_MS,
+        signal
+      })
+      return {
+        text: finalizeChatResponse(raw, lookupContext, lastUser, hasAction ? { compoundAction: true } : undefined),
+        calls: [],
+        trustedUrls
+      }
+    }
+
+    const raw = await ollamaGenerate({
+      system: buildRouterSystem({
+        goal: payload.goal,
+        tabs: payload.tabs ?? [],
+        activeTabId: payload.activeTabId,
+        pageText: payload.screenText
+      }),
+      prompt,
+      format: ROUTER_SCHEMA,
+      directJson: true,
+      temperature: 0.15,
+      numPredict: 300,
+      timeoutMs: CHAT_TIMEOUT_MS,
+      signal
+    })
+    const { say, calls } = parseRouterOutput(raw)
+    return { text: say || 'Done.', calls, trustedUrls: [] }
+  } catch (e) {
+    throw formatChatError(e)
+  }
+}
+
 export function registerAiIpc() {
   ipcMain.handle('ai:select-page-passages', async (_evt, payload: { query: string; snapshot: PagePassageSnapshot }) => {
     return selectPagePassages(payload.query, payload.snapshot, undefined, (completed, total) => {
@@ -177,151 +226,124 @@ export function registerAiIpc() {
     })
   })
 
+  ipcMain.handle('ai:assist', async (_evt, payload: AssistPayload): Promise<AssistResult> => {
+    const ctl = new AbortController()
+    inflight.set(payload.requestId, ctl)
+    try {
+      const out = await runAssist(payload, ctl.signal)
+      const userText = getLastUserMessage(payload.messages) ?? ''
+      const calls = [...out.calls, ...parseLegacyTags(out.text)]
+      return {
+        text: stripLegacyTags(out.text),
+        actions: proposeActions(calls, { userText, trustedUrls: out.trustedUrls })
+      }
+    } finally {
+      inflight.delete(payload.requestId)
+    }
+  })
+
+  /** Answer a question from the open page, with citations. Returns kind:'none' when the page lacks evidence. */
   ipcMain.handle(
-    'ai:chat',
-    async (
-      _evt,
-      payload: {
-        messages: ChatMessage[]
-        tabs: TabContextItem[]
-        activeTabId?: string
-        screenText?: string
-        screenImageBase64?: string
-      }
-    ) => {
-      const lastUserEarly =
-        (payload.messages ?? []).filter((m) => m.role === 'user').slice(-1)[0]?.content ?? ''
-      const navIntent = detectChatNavIntent(lastUserEarly)
-      const nav = await resolveChatNav(navIntent)
-      if (nav) {
-        return `${nav.say}\n${nav.actions}`
-      }
-
-      const health = await checkOllamaHealth()
-      if (!health.ok) {
-        throw new Error(
-          `${health.error}\nTip: Install Ollama, run it, then: ollama pull ${DEFAULT_MODEL}`
-        )
-      }
-      const prompt = payload.messages.map((m) => `${m.role}: ${m.content}`).join('\n')
-      const lastUser = getLastUserMessage(payload.messages)
-
-      const wantsVision = Boolean(lastUser && needsScreenVision(lastUser))
-      if (wantsVision && payload.screenImageBase64 && lastUser) {
-        const visionHealth = await checkVisionModelHealth()
-        if (visionHealth.ok) {
-          try {
-            return await ollamaVisionChat({
-              system:
-                'You are CCLEAR Focus. Describe what you see on the browser screen and answer the user question. Be concise. Do not mention screenshots, images, or AI vision.',
-              userText: buildVisionPrompt(lastUser, payload.screenText),
-              imageBase64: payload.screenImageBase64,
-              temperature: 0.2,
-              timeoutMs: 90000
-            })
-          } catch (e) {
-            throw formatChatError(e)
-          }
-        }
-
-        const fallback = await ollamaGenerate({
-          system: buildChatSystemPrompt(
-            payload.tabs ?? [],
-            payload.activeTabId,
-            payload.screenText
-          ),
-          prompt,
-          temperature: 0.25,
-          timeoutMs: CHAT_TIMEOUT_MS
-        })
-        return `${fallback.trim()}\n\n(Note: Vision model unavailable — answering from page text only.)`
-      }
-
-      let lookupContext = ''
-      if (lastUser && !wantsVision && needsWebLookup(lastUser)) {
-        lookupContext = await performWebLookup(refineLookupQuery(lastUser)).catch(() => '')
-      }
-
+    'ai:ask-page',
+    async (_evt, p: { requestId: string; question: string; snapshot: PagePassageSnapshot }): Promise<{ kind: 'none' } | ({ kind: 'answer' } & AskResult)> => {
+      const question = String(p.question ?? '').replace(/^\/ask\s*/i, '').trim()
+      const all = (p.snapshot?.passages ?? []).slice(0, 5000)
+      // Meaning-based scores when the local embedding model is installed; keywords otherwise.
+      const semantic = await semanticScores(`${p.snapshot?.url}|${all.length}|${all[0]?.text.length}`, question, all.map((x) => (x.context ? `${x.context}. ${x.text}` : x.text)))
+      const ranked = rankPassages(question, all, 6, semantic)
+      if (!hasEvidence(ranked)) return { kind: 'none' }
+      const quotes = (answer: string): { kind: 'answer' } & AskResult => ({
+        kind: 'answer',
+        answer,
+        grounded: false,
+        sources: ranked.slice(0, 3).map((r) => ({ n: r.n, id: r.id, text: r.text, context: r.context ?? '' }))
+      })
+      if (!(await checkOllamaHealth()).ok) return quotes('The local AI is not running, so here is the closest text on the page:')
+      const ctl = new AbortController()
+      inflight.set(p.requestId, ctl)
       try {
-        const hasLookup = Boolean(lookupContext)
-        const hasAction = Boolean(lastUser && wantsBrowserAction(lastUser))
-        const lookupPrompt = lastUser
-          ? buildLookupPrompt(payload.messages, lastUser)
-          : prompt
-
-        if (hasLookup && hasAction) {
-          const summary = await ollamaGenerate({
-            system: buildCompoundSummarySystemPrompt(lookupContext),
-            prompt: lookupPrompt,
-            temperature: 0.1,
-            numPredict: 100,
-            timeoutMs: CHAT_TIMEOUT_MS
-          })
-          return finalizeChatResponse(summary, lookupContext, lastUser, { compoundAction: true })
-        }
-
-        if (hasLookup) {
-          const response = await ollamaGenerate({
-            system: buildLookupAnswerSystemPrompt(lookupContext),
-            prompt: lookupPrompt,
-            temperature: 0.1,
-            numPredict: 200,
-            timeoutMs: CHAT_TIMEOUT_MS
-          })
-          return finalizeChatResponse(response, lookupContext, lastUser)
-        }
-
-        let response = await ollamaGenerate({
-          system: buildChatSystemPrompt(
-            payload.tabs ?? [],
-            payload.activeTabId,
-            payload.screenText
-          ),
-          prompt,
-          temperature: 0.25,
-          timeoutMs: CHAT_TIMEOUT_MS
+        const raw = await ollamaGenerate({
+          system: buildAskSystem(),
+          prompt: buildAskPrompt(question, ranked),
+          format: ASK_SCHEMA,
+          directJson: true,
+          temperature: 0.1,
+          numPredict: 260,
+          numCtx: 4096,
+          timeoutMs: 40000,
+          signal: ctl.signal
         })
-
-        const lookupQuery = extractWebLookupTag(response)
-        if (lookupQuery) {
-          lookupContext = await performWebLookup(refineLookupQuery(lookupQuery)).catch(() => '')
-          const reactiveHasAction = Boolean(lastUser && wantsBrowserAction(lastUser))
-          if (lookupContext && reactiveHasAction) {
-            const summary = await ollamaGenerate({
-              system: buildCompoundSummarySystemPrompt(lookupContext),
-              prompt: lookupPrompt,
-              temperature: 0.1,
-              numPredict: 100,
-              timeoutMs: CHAT_TIMEOUT_MS
-            })
-            return finalizeChatResponse(summary, lookupContext, lastUser, {
-              compoundAction: true
-            })
-          } else {
-            response = await ollamaGenerate({
-              system: buildLookupAnswerSystemPrompt(
-                lookupContext || 'Fetched: unknown\n\n(no results found)'
-              ),
-              prompt: lookupPrompt,
-              temperature: 0.1,
-              numPredict: 200,
-              timeoutMs: CHAT_TIMEOUT_MS
-            })
-          }
-        }
-
-        return finalizeChatResponse(response, lookupContext || undefined, lastUser)
+        const parsed = parseAsk(raw, ranked, dropsNumericDetails)
+        return parsed ? { kind: 'answer', ...parsed } : { kind: 'none' }
       } catch (e) {
-        throw formatChatError(e)
+        if (ctl.signal.aborted) throw new Error('Cancelled')
+        return quotes('I could not finish thinking about that, so here is the closest text on the page:')
+      } finally {
+        inflight.delete(p.requestId)
       }
     }
   )
+
+  /** Answer a question using several open tabs, with per-tab citations. */
+  ipcMain.handle(
+    'ai:ask-tabs',
+    async (_evt, p: { requestId: string; question: string; tabs: TabText[] }): Promise<{ answer: string; sources: Array<{ n: number; tabId: string; title: string; url: string }> }> => {
+      const question = String(p.question ?? '').replace(/^\/tabs\s*/i, '').trim() || 'Summarize and compare these tabs.'
+      const tabs = (p.tabs ?? []).slice(0, 6).map((t) => ({ ...t, excerpts: pickExcerpts(question, String(t.text ?? '').slice(0, 20000)) })).filter((t) => t.excerpts.length)
+      if (!tabs.length) return { answer: 'None of your open tabs have readable text yet.', sources: [] }
+      if (!(await checkOllamaHealth()).ok) throw new Error('The local AI is not running. Start Ollama to ask about several tabs at once.')
+      const ctl = new AbortController()
+      inflight.set(p.requestId, ctl)
+      try {
+        const raw = await ollamaGenerate({
+          system: buildTabsSystem(),
+          prompt: buildTabsPrompt(question, tabs),
+          format: TABS_SCHEMA,
+          directJson: true,
+          temperature: 0.1,
+          numPredict: 300,
+          numCtx: 4096,
+          timeoutMs: 45000,
+          signal: ctl.signal
+        })
+        const parsed = parseTabsAnswer(raw, tabs.length)
+        if (!parsed) return { answer: 'I could not put that together. Try asking about one tab at a time.', sources: [] }
+        return {
+          answer: parsed.answer,
+          sources: parsed.sources.map((n) => ({ n, tabId: tabs[n - 1].id, title: tabs[n - 1].title, url: tabs[n - 1].url }))
+        }
+      } catch (e) {
+        if (ctl.signal.aborted) throw new Error('Cancelled')
+        throw formatChatError(e)
+      } finally {
+        inflight.delete(p.requestId)
+      }
+    }
+  )
+
+  ipcMain.handle('ai:cancel', (_evt, requestId: string) => {
+    inflight.get(requestId)?.abort()
+  })
 
   ipcMain.handle('ai:health', async () => {
     return checkOllamaHealth()
   })
 
-  ipcMain.handle('ai:simplify-chunks', async (_evt, chunks: SimplifyChunk[]) => simplifyBlocks(chunks))
+  // Selective review (measured: same output as no review on this set, but risky blocks are still fact-checked),
+  // with a stronger installed model as reviewer when the machine can hold both. See docs/MODEL_BENCHMARK.md.
+  // Without a trustworthy reviewer (the 4B model rejected 50% of faithful rewrites even with the lenient prompt),
+  // the rule-based checks (numbers, dates, grammar, length) gate the rewrite and nothing claims to be model-reviewed.
+  let simplifier = createSimplifier(ollamaGenerate, { review: 'never' })
+  let simplifierKey = 'default'
+  ipcMain.handle('ai:simplify-chunks', async (_evt, chunks: SimplifyChunk[]) => {
+    const reviewer = pickReviewer(await listInstalledModels(), os.totalmem() / 1024 ** 3)
+    const key = JSON.stringify(reviewer)
+    if (key !== simplifierKey) {
+      simplifier = createSimplifier(ollamaGenerate, { review: reviewer.model ? 'selective' : 'never', reviewer })
+      simplifierKey = key
+    }
+    return simplifier(chunks)
+  })
 
   ipcMain.handle('ai:group-tabs', async (_evt, tabs: TabContextItem[]) => {
     if (tabs.length < 2) return []
