@@ -3,9 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerAllIpc } from './ipc/register'
+import { installBlocker } from './blocker'
+import { installLedger } from './ledger'
+import { configureBrowsingSession, hardenWebContents, disableRemoteContent } from './security'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+installLedger()
 registerAllIpc()
 
 /** Send an IPC action to the focused renderer window */
@@ -51,11 +55,21 @@ function buildAppMenu() {
           click: () => sendToRenderer('shortcut', 'close-tab')
         },
         {
+          label: 'Park This Tab',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: () => sendToRenderer('shortcut', 'park-tab')
+        },
+        {
           label: 'Reopen Closed Tab',
           accelerator: 'CmdOrCtrl+Shift+T',
           click: () => sendToRenderer('shortcut', 'reopen-tab')
         },
         { type: 'separator' },
+        {
+          label: 'Command Palette',
+          accelerator: 'CmdOrCtrl+K',
+          click: () => sendToRenderer('shortcut', 'palette')
+        },
         {
           label: 'Open Location',
           accelerator: 'CmdOrCtrl+L',
@@ -121,6 +135,11 @@ function buildAppMenu() {
           label: 'Toggle Focus Mode',
           accelerator: 'CmdOrCtrl+Shift+F',
           click: () => sendToRenderer('shortcut', 'toggle-focus')
+        },
+        {
+          label: 'Calm View (I feel overwhelmed)',
+          accelerator: 'CmdOrCtrl+Shift+C',
+          click: () => sendToRenderer('shortcut', 'calm')
         },
         {
           label: 'Toggle Sidebar',
@@ -259,39 +278,22 @@ async function createWindow() {
     }
   })
 
+  // Must run before the renderer loads so the first <webview> is already covered.
+  configureBrowsingSession(win)
+  hardenWebContents(win)
+
   const urlOrFile = resolveRendererUrl()
   if (urlOrFile.startsWith('http')) {
     await win.loadURL(urlOrFile)
   } else {
     await win.loadFile(urlOrFile)
   }
-
-  // Ensure webviews render with standard desktop user agent
-  const ses = win.webContents.session
-  ses.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
-
-  // Allow webviews to open new windows (popups) normally
-  ses.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const allowed = ['media', 'geolocation', 'notifications', 'fullscreen', 'pointerLock']
-    callback(allowed.includes(permission))
-  })
-
-  // Suppress noisy console errors from ad trackers and failed network requests
-  ses.webRequest.onErrorOccurred((_details) => {
-    // silently swallow — these are ad/tracker failures, not app bugs
-  })
-
-  // Handle new-window events from webviews (links with target="_blank")
-  win.webContents.on('did-attach-webview', (_event, wc) => {
-    wc.setWindowOpenHandler(({ url }) => {
-      // Navigate the webview itself instead of opening a system window
-      wc.loadURL(url)
-      return { action: 'deny' }
-    })
-  })
 }
 
+disableRemoteContent()
+
 app.whenReady().then(() => {
+  installBlocker()
   void createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow()
