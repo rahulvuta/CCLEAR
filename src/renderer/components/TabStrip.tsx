@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
+import type { TabVerdict } from '../hooks/useDrift'
 
 export type UITab = { id: string; title: string; url: string; src?: string; group?: string; favicon?: string }
 
@@ -8,9 +9,10 @@ type Props = {
   setActiveId: Dispatch<SetStateAction<string>>
   onClose: (id: string) => void
   onNewTab: () => void
+  verdicts?: Record<string, TabVerdict>
 }
 
-export function TabStrip({ tabs, activeId, setActiveId, onClose, onNewTab }: Props) {
+export function TabStrip({ tabs, activeId, setActiveId, onClose, onNewTab, verdicts }: Props) {
   // Group tabs for rendering
   const groupedTabs: { group: string; tabs: UITab[] }[] = []
   let currentGroup = ''
@@ -33,14 +35,22 @@ export function TabStrip({ tabs, activeId, setActiveId, onClose, onNewTab }: Pro
   }
 
   return (
-    <div className="tabStrip">
+    <div className="tabStrip" role="tablist" aria-label="Open tabs">
       {groupedTabs.map((g, idx) => (
         <div key={`g-${idx}`} className="tabGroupContainer">
           {g.group && <div className="tabGroupLabel">{g.group}</div>}
           <div className={`tabGroup ${g.group ? 'hasGroup' : ''}`}>
             {g.tabs.map((tab) => (
-              <div key={tab.id} className="tab" role="tab" data-active={tab.id === activeId ? 'true' : 'false'}>
+              <div key={tab.id} className="tab" role="tab" aria-selected={tab.id === activeId} data-active={tab.id === activeId ? 'true' : 'false'}>
                 <button type="button" className="tabTitle" title={tab.url} onClick={() => setActiveId(tab.id)}>
+                  {verdicts?.[tab.id] && tab.url !== 'about:blank' && (
+                    <span
+                      className={`tabVerdict verdict-${verdicts[tab.id].verdict}`}
+                      title={`${verdicts[tab.id].verdict === 'on' ? 'On task' : verdicts[tab.id].verdict === 'off' ? 'Off task' : 'Not sure'}: ${verdicts[tab.id].reason}`}
+                      role="img"
+                      aria-label={verdicts[tab.id].verdict === 'on' ? 'On task' : verdicts[tab.id].verdict === 'off' ? 'Off task' : 'Not sure if on task'}
+                    />
+                  )}
                   {tab.favicon && <img src={tab.favicon} className="tabFavicon" alt="" />}
                   <span className="tabTitleText">
                     {tab.title || (tab.url === 'about:blank' ? 'New tab' : tab.url) || 'New tab'}
