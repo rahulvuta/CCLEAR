@@ -5,9 +5,29 @@ import { ChatSidebar } from './components/ChatSidebar'
 import { TabStrip, type UITab } from './components/TabStrip'
 import { TopBar } from './components/TopBar'
 import { WebviewHost } from './components/WebviewHost'
-import type { ChatMessage, PageBlockForSimplify, TabContextItem, TabContextSummary } from '../shared/types'
+import type { PageBlockForSimplify, TabContextItem, TabContextSummary } from '../shared/types'
 import type { ApplySummaryItem } from '../focus/simplify'
 import { WhyAmIHereBox } from './components/WhyAmIHereBox'
+import { SessionBar } from './components/SessionBar'
+import { ParkingPanel } from './components/ParkingPanel'
+import { DriftNudge } from './components/DriftNudge'
+import { ResumeToast } from './components/ResumeToast'
+import { ReadingPanel } from './components/ReadingPanel'
+import { useReading } from './hooks/useReading'
+import { SettingsPanel } from './components/SettingsPanel'
+import { FrictionGate } from './components/FrictionGate'
+import { FindBar } from './components/FindBar'
+import { SessionRecap } from './components/SessionRecap'
+import { TabDiet } from './components/TabDiet'
+import { buildRecap, type Recap } from '../session/recap'
+import { CommandPalette } from './components/CommandPalette'
+import type { Command } from '../shared/palette'
+import { useAssistant } from './hooks/useAssistant'
+import { useSession } from './hooks/useSession'
+import { useDrift } from './hooks/useDrift'
+import { progressKey } from '../session/store'
+import { describeProgress, getProgressProbeScript, getScrollToRatioScript, worthResuming } from '../session/progress'
+import type { ParkedItem, ReadingProgress } from '../shared/session'
 import {
   buildApplySummariesScript,
   buildRestoreSummariesScript,
@@ -17,11 +37,8 @@ import {
   sameFocusSimplifyPage
 } from '../focus/simplify'
 import { selectBlocksForSimplify } from '../focus/blockFilters'
+import { viewportFirst } from '../focus/order'
 import { getInjectReadingAssistScript, getSetFocusVisualScript } from '../focus/injector'
-import { detectPageActionIntent, pageActionSay, parsePageActionTags, type PageActionIntent } from '../ai/pageActions'
-import { getPageMarkScript, getPagePassagesScript } from '../focus/pageMarks'
-import type { PagePassageSnapshot } from '../ai/pageActions'
-import { needsScreenVision } from '../ai/screenVision'
 
 const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
@@ -131,6 +148,8 @@ export function App() {
   const simplifyEpochRef = useRef(0)
   const runFocusAutoSimplifyRef = useRef<(tabId: string, pageUrl: string) => void>(() => {})
   const persistFocusModeRef = useRef<(next: boolean) => Promise<void>>(async () => {})
+  const parkTabRef = useRef<(tabId: string) => void>(() => {})
+  const hasGoalRef = useRef(false)
 
   function simplifyCacheKey(tabId: string, url: string): string {
     return focusSimplifyCacheKey(tabId, url)
@@ -149,11 +168,6 @@ export function App() {
   const invalidateSimplifyLatestRef = useRef(invalidateSimplifyStateForTab)
   invalidateSimplifyLatestRef.current = invalidateSimplifyStateForTab
 
-  const [chatInput, setChatInput] = useState('')
-  const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([])
-  const [chatSending, setChatSending] = useState(false)
-  const [chatThink, setChatThink] = useState('')
-  const [chatDraft, setChatDraft] = useState('')
   const aiHealthyRef = useRef(false)
   const [aiHealthy, setAiHealthy] = useState<boolean | null>(null)
   const webviewRefs = useRef<Record<string, WebviewTag | null>>({})
@@ -292,8 +306,15 @@ export function App() {
     if (!blocks.length) return
     if (!stillCurrent()) return
 
-    const list = selectBlocksForSimplify(blocks, SIMPLIFY_MAX_BLOCKS)
+    let list = selectBlocksForSimplify(blocks, SIMPLIFY_MAX_BLOCKS)
     if (!list.length) return
+    // Rewrite what the reader can see first; the rest streams in behind it.
+    try {
+      const m = JSON.parse(String(await w.executeJavaScript('JSON.stringify({ y: window.scrollY, h: window.innerHeight })', true)))
+      list = viewportFirst(list, Number(m.y) || 0, Number(m.h) || 800)
+    } catch {
+      //
+    }
 
     const chunks = pageBlocksToSimplifyChunks(list)
     const origById = new Map(list.map((b) => [b.id, b.text]))
@@ -302,9 +323,11 @@ export function App() {
     setSimplifyBusy(true)
     try {
       const out: ApplySummaryItem[] = []
-      for (let offset = 0; offset < chunks.length; offset += 3) {
+      // First batch is small so the first visible paragraphs change quickly.
+      for (let offset = 0; offset < chunks.length; offset += offset === 0 ? 2 : 3) {
         if (!stillCurrent()) return
-        const res = await window.cclearBrowser.ai.simplifyChunks(chunks.slice(offset, offset + 3))
+        const size = offset === 0 ? 2 : 3
+        const res = await window.cclearBrowser.ai.simplifyChunks(chunks.slice(offset, offset + size))
         if (!stillCurrent()) return
         const batch = res.map((r) => ({
           ...r,
@@ -389,6 +412,7 @@ export function App() {
     }
     await window.cclearBrowser.prefs.set({ focusModeEnabled: next })
     if (!next) {
+      reading.setShowingOriginal(false)
       await restoreSimplifiedAcrossAllTabs()
     }
   }, [])
@@ -497,6 +521,7 @@ export function App() {
         syncUrlFromWebview()
         await injectAssist(w)
         await applyFocusVisual(w, focusModeEnabledRef.current)
+        await applyReadingRef.current(w)
         const tid = id
         
         // Sync title on load just in case event was missed
@@ -512,7 +537,8 @@ export function App() {
           pageUrl = tabsRef.current.find((x) => x.id === tid)?.url ?? 'about:blank'
         }
         
-        if (pageUrl && !pageUrl.startsWith('about:')) {
+        // The goal bar already says why you are here; only guess when there is no goal.
+        if (pageUrl && !pageUrl.startsWith('about:') && !hasGoalRef.current) {
           if (lastInferredRef.current.get(tid) !== pageUrl) {
             lastInferredRef.current.set(tid, pageUrl)
             setContextLoading(p => ({ ...p, [tid]: true }))
@@ -546,6 +572,12 @@ export function App() {
       w.addEventListener('did-finish-load', onLoad)
       w.addEventListener('page-title-updated', onTitle as any)
       w.addEventListener('page-favicon-updated', onFavicon as any)
+      w.addEventListener('found-in-page', ((e: any) => {
+        const r = e.result
+        if (!r) return
+        setFindActive(r.activeMatchOrdinal ?? 0)
+        setFindCount(r.matches ?? 0)
+      }) as any)
     },
     [injectAssist]
   )
@@ -638,265 +670,443 @@ export function App() {
     setActiveId(nextActive)
   }
 
-  const handleSendChat = async (override?: string) => {
-    const txt = String(override ?? chatInput ?? '').trim()
-    if (!txt || chatSending) return
-    setChatSending(true)
-    setChatThink('')
-    setChatDraft('')
-    const nextMsgs: ChatMessage[] = [...chatMsgs, { role: 'user', content: txt }]
-    setChatMsgs(nextMsgs)
-    if (!override) setChatInput('')
+  // First run: if the local AI is not ready, show the setup panel once instead of failing quietly.
+  useEffect(() => {
+    if (aiHealthy !== false) return
     try {
-      const activeWv = webviewRefs.current[activeIdRef.current]
-      let pageUrl = ''
-      try { pageUrl = activeWv?.getURL?.() || '' } catch { pageUrl = '' }
-
-      const runPageMark = async (intent: PageActionIntent) => {
-        if (!activeWv || intent.kind === 'none') return { count: 0, scrolled: false }
-        await injectAssist(activeWv)
-        if (intent.kind === 'clear') {
-          return activeWv.executeJavaScript(getPageMarkScript({ mode: 'clear' }), true)
-        }
-        setChatDraft('Finding matching passages…')
-        const snapshot: PagePassageSnapshot = await activeWv.executeJavaScript(getPagePassagesScript(), true)
-        const selection = await window.cclearBrowser.ai.selectPagePassages(intent.query, snapshot)
-        const selectedIds = new Set(selection.ids)
-        const raw = await activeWv.executeJavaScript(getPageMarkScript({
-          mode: intent.kind,
-          url: snapshot.url,
-          passages: snapshot.passages.filter((p) => selectedIds.has(p.id))
-        }), true)
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-        return {
-          count: Number(parsed?.count || 0), scrolled: Boolean(parsed?.scrolled),
-          stale: Boolean(parsed?.stale), usedFallback: selection.usedFallback
-        }
-      }
-
-      const pageAct = detectPageActionIntent(txt)
-      if (pageAct.kind !== 'none') {
-        if (!activeWv || /^about:/i.test(pageUrl)) {
-          setChatMsgs([...nextMsgs, { role: 'assistant', content: 'Open a page first, then I can mark or scroll on it.' }])
-          return
-        }
-        const result = await runPageMark(pageAct)
-        setChatMsgs([...nextMsgs, { role: 'assistant', content: pageActionSay(pageAct, result) }])
-        return
-      }
-
-      // Grab screen text if a webview is active
-      let screenText = ''
-      let screenImageBase64: string | undefined
-      const activeTab = tabsRef.current.find((t) => t.id === activeIdRef.current)
-      const isBlankTab = !activeTab?.url || activeTab.url === 'about:blank'
-      if (activeWv) {
-        try {
-          const raw = await activeWv.executeJavaScript(
-            `(() => {
-              const title = document.title || '';
-              const href = String(location.href || '');
-              if (!href || href === 'about:blank') return JSON.stringify({ title, href, text: '' });
-              const main = document.querySelector('#mw-content-text .mw-parser-output, #mw-content-text, article, main, [role="main"]');
-              const rawText = String((main && (main.innerText || main.textContent)) || (document.body && (document.body.innerText || document.body.textContent)) || '');
-              const text = rawText.replace(/\\s+/g, ' ').trim().slice(0, 1600);
-              return JSON.stringify({ title, href, text });
-            })()`,
-            true
-          )
-          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-          const title = String(parsed?.title || '')
-          const href = String(parsed?.href || pageUrl || '')
-          const text = String(parsed?.text || '')
-          screenText = text ? `TITLE: ${title}\nURL: ${href}\nTEXT: ${text}` : ''
-        } catch {
-          //
-        }
-        if (needsScreenVision(txt) && !isBlankTab) {
-          try {
-            const image = await activeWv.capturePage()
-            const size = image.getSize()
-            const maxW = 1280
-            const resized = size.width > maxW ? image.resize({ width: maxW }) : image
-            screenImageBase64 = resized.toPNG().toString('base64')
-          } catch {
-            //
-          }
-        }
-      }
-
-      const assistant = await window.cclearBrowser.ai.chat(
-        nextMsgs.slice(-16),
-        tabContextItems,
-        activeId,
-        screenText,
-        screenImageBase64
-      )
-
-      const taggedAct = parsePageActionTags(assistant)
-      let pageActionMessage = ''
-      if (taggedAct.kind !== 'none' && activeWv && !/^about:/i.test(pageUrl)) {
-        pageActionMessage = pageActionSay(taggedAct, await runPageMark(taggedAct))
-      }
-      
-      // Execute AI actions
-      if (assistant.includes('[GOTO:')) {
-        const m = assistant.match(/\[GOTO:\s*([\s\S]*?)\]/i)
-        if (m) {
-          const url = normalizeUrl(m[1].trim())
-          const aid = activeIdRef.current
-          setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
-        }
-      }
-      if (assistant.includes('[NEW_TAB')) {
-        const m = assistant.match(/\[NEW_TAB:?\s*([\s\S]*?)\]/i)
-        const url = (m && m[1].trim()) ? normalizeUrl(m[1].trim()) : 'about:blank'
-        const id = String(crypto.randomUUID())
-        setTabs(t => [...t, { id, url, src: url, title: '' }])
-        setActiveId(id)
-      }
-      if (assistant.includes('[BACK]')) goBack()
-      if (assistant.includes('[FORWARD]')) goForward()
-      if (assistant.includes('[RELOAD]')) reload()
-
-      if (assistant.includes('[SEARCH:')) {
-        const m = assistant.match(/\[SEARCH:\s*([\s\S]*?)\]/i)
-        if (m) {
-          const q = m[1].trim()
-          const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`
-          const aid = activeIdRef.current
-          setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
-        }
-      }
-
-      if (assistant.includes('[PLAY_YOUTUBE:')) {
-        const m = assistant.match(/\[PLAY_YOUTUBE:\s*([\s\S]*?)\]/i)
-        if (m) {
-          const q = m[1].trim()
-          const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
-          const aid = activeIdRef.current
-          setNavUrl(url)
-          setTabs(prev => prev.map(t => t.id === aid ? { ...t, url, src: url, title: '' } : t))
-          
-          // Auto-click the first video after load
-          setTimeout(() => {
-            const w = webviewRefs.current[aid]
-            if (w) {
-              w.executeJavaScript(`
-                (() => {
-                  const check = setInterval(() => {
-                    const firstVid = document.querySelector('ytd-video-renderer a#video-title, ytd-compact-video-renderer a#video-title');
-                    if (firstVid) {
-                      clearInterval(check);
-                      firstVid.click();
-                    }
-                  }, 500);
-                  setTimeout(() => clearInterval(check), 5000);
-                })();
-              `, true).catch(() => {})
-            }
-          }, 1500)
-        }
-      }
-
-      if (assistant.includes('[CLICK:')) {
-        const m = assistant.match(/\[CLICK:\s*([\s\S]*?)\]/i)
-        if (m) {
-          const text = m[1].trim()
-          const w = webviewRefs.current[activeIdRef.current]
-          if (w) {
-            w.executeJavaScript(`
-              (() => {
-                const text = ${JSON.stringify(text)}.toLowerCase();
-                const els = Array.from(document.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]'));
-                const target = els.find(e => (e.innerText || e.value || '').toLowerCase().includes(text));
-                if (target) {
-                  target.click();
-                  return true;
-                }
-                return false;
-              })();
-            `, true).catch(() => {})
-          }
-        }
-      }
-
-      if (assistant.includes('[TYPE:')) {
-        const m = assistant.match(/\[TYPE:\s*([^,]+),\s*([\s\S]*?)\]/i)
-        if (m) {
-          const label = m[1].trim()
-          const text = m[2].trim()
-          const w = webviewRefs.current[activeIdRef.current]
-          if (w) {
-            w.executeJavaScript(`
-              (() => {
-                const l = ${JSON.stringify(label)}.toLowerCase();
-                const inputs = Array.from(document.querySelectorAll('input, textarea'));
-                const target = inputs.find(i => {
-                  return (i.placeholder || '').toLowerCase().includes(l) ||
-                         (i.name || '').toLowerCase().includes(l) ||
-                         (i.id || '').toLowerCase().includes(l) ||
-                         (i.getAttribute('aria-label') || '').toLowerCase().includes(l);
-                });
-                if (target) {
-                  target.value = ${JSON.stringify(text)};
-                  target.dispatchEvent(new Event('input', { bubbles: true }));
-                  target.dispatchEvent(new Event('change', { bubbles: true }));
-                  if (target.form) {
-                    const sb = target.form.querySelector('input[type="submit"], button[type="submit"]');
-                    if (sb) sb.click();
-                    else target.form.submit();
-                  } else {
-                    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-                  }
-                  return true;
-                }
-                return false;
-              })();
-            `, true).catch(() => {})
-          }
-        }
-      }
-
-      // Clean display message
-      const displayMsg = assistant
-        .replace(/\[GOTO:[\s\S]*?\]/gi, '')
-        .replace(/\[NEW_TAB:?[\s\S]*?\]/gi, '')
-        .replace(/\[BACK\]/gi, '')
-        .replace(/\[FORWARD\]/gi, '')
-        .replace(/\[RELOAD\]/gi, '')
-        .replace(/\[SEARCH:[\s\S]*?\]/gi, '')
-        .replace(/\[PLAY_YOUTUBE:[\s\S]*?\]/gi, '')
-        .replace(/\[CLICK:[\s\S]*?\]/gi, '')
-        .replace(/\[TYPE:[\s\S]*?\]/gi, '')
-        .replace(/\[HIGHLIGHT:[\s\S]*?\]/gi, '')
-        .replace(/\[UNDERLINE:[\s\S]*?\]/gi, '')
-        .replace(/\[BOLD:[\s\S]*?\]/gi, '')
-        .replace(/\[SCROLL:[\s\S]*?\]/gi, '')
-        .replace(/\[CLEAR_MARKS\]/gi, '')
-        .trim()
-
-      const hasTags = assistant.includes('[') && assistant.includes(']')
-      const finalMsg = pageActionMessage || (displayMsg ? displayMsg : (hasTags ? "Action completed." : assistant))
-
-      setChatMsgs([...nextMsgs, { role: 'assistant', content: finalMsg }])
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setChatMsgs([...nextMsgs, { role: 'assistant', content: `Assistant error:\n${msg}` }])
-    } finally {
-      setChatSending(false)
-      setChatThink('')
-      setChatDraft('')
+      if (localStorage.getItem('cclear.setupShown') === '1') return
+      localStorage.setItem('cclear.setupShown', '1')
+    } catch {
+      //
     }
+    setSettingsOpen(true)
+  }, [aiHealthy])
+
+  // ── Session, assistant and drift ────────────────────────────────────────────
+  const session = useSession()
+  hasGoalRef.current = Boolean(session.state.current)
+  const [stepsLoading, setStepsLoading] = useState(false)
+  const [parkingOpen, setParkingOpen] = useState(false)
+  const [readingOpen, setReadingOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [recap, setRecap] = useState<Recap | null>(null)
+  const [dietDismissedUntil, setDietDismissedUntil] = useState(0)
+  const [calmNote, setCalmNote] = useState('')
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findActive, setFindActive] = useState(0)
+  const [findCount, setFindCount] = useState(0)
+  const shortcutExtraRef = useRef<(action: string, args: unknown[]) => void>(() => {})
+  const [blockerEnabled, setBlockerEnabled] = useState(true)
+  const [blockedCount, setBlockedCount] = useState(0)
+  const [friction, setFriction] = useState<{ tabId: string; host: string } | null>(null)
+  const frictionPassed = useRef(new Map<string, number>())
+  const reading = useReading({ webviewRefs, activeIdRef })
+  const applyReadingRef = useRef(reading.applyTo)
+  applyReadingRef.current = reading.applyTo
+  const [resumeOffer, setResumeOffer] = useState<{ tabId: string; progress: ReadingProgress } | null>(null)
+
+  function navigateActive(url: string) {
+    const aid = activeIdRef.current
+    setNavUrl(url)
+    setTabs((prev) => prev.map((t) => (t.id === aid ? { ...t, url, src: url, title: '', favicon: faviconForUrl(url) || t.favicon } : t)))
+  }
+
+  function openTabAt(url: string) {
+    const id = String(crypto.randomUUID())
+    setTabs((t) => [...t, { id, url, src: url, title: '' }])
+    setActiveId(id)
+  }
+
+  const getTabText = useCallback(async (tabId: string) => {
+    const w = webviewRefs.current[tabId]
+    if (!w) return ''
+    try {
+      return String(
+        await w.executeJavaScript(
+          `(document.querySelector('article, main, [role="main"]') || document.body).innerText.replace(/\\s+/g,' ').trim().slice(0,800)`,
+          true
+        )
+      )
+    } catch {
+      return ''
+    }
+  }, [])
+
+  const drift = useDrift({
+    tabs,
+    activeId,
+    session: session.state.current,
+    assistLevel: session.state.assistLevel,
+    getText: getTabText
+  })
+
+  function parkTab(tabId: string, note?: string) {
+    const tab = tabsRef.current.find((t) => t.id === tabId)
+    if (!tab || !tab.url || tab.url === 'about:blank') return
+    const prog = session.state.progress[progressKey(tab.url)]
+    session.dispatch({
+      type: 'park',
+      item: {
+        id: crypto.randomUUID(),
+        kind: 'tab',
+        title: tab.title || tab.url,
+        url: tab.url,
+        favicon: tab.favicon,
+        note: note && note !== 'Parked from chat' ? note : undefined,
+        createdAt: Date.now(),
+        scrollRatio: prog?.ratio
+      }
+    })
+    if (tabsRef.current.length <= 1) {
+      navigateActive('about:blank')
+    } else {
+      closeTab(tabId)
+    }
+  }
+
+  parkTabRef.current = (id) => parkTab(id)
+
+  function restoreParked(item: ParkedItem) {
+    if (!item.url) return
+    openTabAt(item.url)
+    session.dispatch({ type: 'unpark', id: item.id })
+    setParkingOpen(false)
+  }
+
+  function backToTask() {
+    const target = tabsRef.current.find((t) => t.id !== activeIdRef.current && drift.verdicts[t.id]?.verdict === 'on' && t.url !== 'about:blank')
+    if (target) setActiveId(target.id)
+    else openTabAt('about:blank')
+    drift.dismissNudge()
+  }
+
+  const assistant = useAssistant({
+    webviewRefs,
+    tabsRef,
+    activeIdRef,
+    tabContextItems,
+    goal: session.state.current?.goal,
+    normalizeUrl,
+    navigateActive,
+    openTab: openTabAt,
+    goBack,
+    goForward,
+    reload,
+    injectAssist,
+    parkActiveTab: (note) => parkTab(activeIdRef.current, note),
+    switchTab: setActiveId
+  })
+
+  useEffect(() => {
+    const api = window.cclearBrowser.ai
+    if (!api.onChatProgress) return
+    return api.onChatProgress((payload) => {
+      assistant.setThink(payload.think || '')
+      assistant.setDraft(payload.content || '')
+    })
+  }, [assistant.setThink, assistant.setDraft])
+
+  // Restore the previous session's tabs once, right after the saved state loads.
+  const restoredOnce = useRef(false)
+  useEffect(() => {
+    if (restoredOnce.current || !session.ready) return
+    restoredOnce.current = true
+    const saved = session.restored?.tabs ?? []
+    if (!saved.length) return
+    // If the user already started browsing before the saved state finished loading, do not overwrite their tabs.
+    const untouched = tabsRef.current.length === 1 && (!tabsRef.current[0].url || tabsRef.current[0].url === 'about:blank')
+    if (!untouched) return
+    const next = saved.map((t) => ({ id: String(crypto.randomUUID()), url: t.url, src: t.url, title: t.title, favicon: t.favicon }))
+    setTabs(next)
+    const activeIdx = Math.max(0, saved.findIndex((t) => t.active))
+    setActiveId(next[activeIdx].id)
+  }, [session.ready, session.restored])
+
+  // Persist the open tabs so a restart (or crash) returns to the same place.
+  const tabsSnapshot = useMemo(
+    () => JSON.stringify(tabs.filter((t) => t.url && t.url !== 'about:blank').map((t) => ({ url: t.url, title: t.title, favicon: t.favicon, active: t.id === activeId }))),
+    [tabs, activeId]
+  )
+  useEffect(() => {
+    if (!session.ready || !restoredOnce.current) return
+    session.dispatch({ type: 'saveTabs', tabs: JSON.parse(tabsSnapshot) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabsSnapshot, session.ready])
+
+  // Remember how far the user got on the active page.
+  const recordProgress = useCallback(async (tabId: string) => {
+    const w = webviewRefs.current[tabId]
+    const tab = tabsRef.current.find((t) => t.id === tabId)
+    if (!w || !tab || !tab.url || tab.url === 'about:blank') return
+    try {
+      const raw = await w.executeJavaScript(getProgressProbeScript(), true)
+      const p = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (!p?.tall) return
+      session.dispatch({
+        type: 'progress',
+        progress: { url: progressKey(tab.url), title: tab.title, ratio: Number(p.ratio) || 0, heading: p.heading || undefined, at: Date.now() }
+      })
+    } catch {
+      //
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    const timer = setInterval(() => void recordProgress(activeIdRef.current), 10000)
+    return () => clearInterval(timer)
+  }, [recordProgress])
+
+  // Leaving a tab (or switching away) saves its position first.
+  const prevActive = useRef(activeId)
+  useEffect(() => {
+    if (prevActive.current !== activeId) void recordProgress(prevActive.current)
+    prevActive.current = activeId
+  }, [activeId, recordProgress])
+
+  // Offer to resume when a page with saved progress finishes loading.
+  const offeredFor = useRef(new Set<string>())
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === activeId)
+    if (!tab || !tab.url || tab.url === 'about:blank') return
+    const key = progressKey(tab.url)
+    const sig = `${activeId}|${key}`
+    if (offeredFor.current.has(sig)) return
+    const p = session.state.progress[key]
+    if (!worthResuming(p, Date.now())) return
+    offeredFor.current.add(sig)
+    const timer = setTimeout(() => setResumeOffer({ tabId: activeId, progress: p }), 1800)
+    return () => clearTimeout(timer)
+  }, [activeId, tabs, session.state.progress])
+
+  // Count of ads/trackers blocked on the active page.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      const w = webviewRefs.current[activeIdRef.current]
+      try {
+        const id = w?.getWebContentsId?.()
+        setBlockedCount(id ? await window.cclearBrowser.blocker.count(id) : 0)
+      } catch {
+        setBlockedCount(0)
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // Pause sites: a short deliberate delay before a site the user chose to be careful with.
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === activeId)
+    const host = (() => {
+      try {
+        return tab ? new URL(tab.url).hostname.replace(/^www\./, '') : ''
+      } catch {
+        return ''
+      }
+    })()
+    const hit = host && session.state.frictionHosts.some((h) => host === h || host.endsWith(`.${h}`))
+    if (!hit) {
+      if (friction && friction.tabId === activeId) setFriction(null)
+      return
+    }
+    const passedAt = frictionPassed.current.get(`${activeId}|${host}`)
+    if (passedAt && Date.now() - passedAt < 20 * 60_000) return
+    if (!friction || friction.tabId !== activeId || friction.host !== host) {
+      setFriction({ tabId: activeId, host })
+      try { webviewRefs.current[activeId]?.setAudioMuted(true) } catch { /* */ }
+    }
+  }, [tabs, activeId, session.state.frictionHosts, friction])
+
+  const activeSiteHost = (() => {
+    try {
+      return new URL(activeTab.url).hostname.replace(/^www\./, '')
+    } catch {
+      return ''
+    }
+  })()
+
+  // ── Find in page, command palette, selection actions ───────────────────────
+  function runFind(forward: boolean) {
+    const w = webviewRefs.current[activeIdRef.current]
+    if (!w || !findQuery.trim()) return
+    try {
+      w.findInPage(findQuery, { forward, findNext: true })
+    } catch {
+      //
+    }
+  }
+  function openFind() {
+    setFindOpen(true)
+    const w = webviewRefs.current[activeIdRef.current]
+    if (w && findQuery.trim()) {
+      try {
+        w.findInPage(findQuery)
+      } catch {
+        //
+      }
+    }
+  }
+  function closeFind() {
+    setFindOpen(false)
+    setFindActive(0)
+    setFindCount(0)
+    try {
+      webviewRefs.current[activeIdRef.current]?.stopFindInPage('clearSelection')
+    } catch {
+      //
+    }
+  }
+  useEffect(() => {
+    // typing in the find box searches live
+    const w = webviewRefs.current[activeIdRef.current]
+    if (!findOpen || !w) return
+    try {
+      if (findQuery.trim()) w.findInPage(findQuery)
+      else w.stopFindInPage('clearSelection')
+    } catch {
+      //
+    }
+  }, [findQuery, findOpen])
+
+  shortcutExtraRef.current = (action, args) => {
+    const arg = String(args[0] ?? '')
+    switch (action) {
+      case 'find': return openFind()
+      case 'palette': return setPaletteOpen(true)
+      case 'open-url-new-tab': return openTabAt(arg)
+      case 'reader': return void reading.openReader()
+      case 'calm': return calmView()
+      case 'selection-explain':
+        setSidebarOpen(true)
+        return void assistant.send(`Explain this in simple words: “${arg}”`)
+      case 'selection-define':
+        setSidebarOpen(true)
+        return void assistant.send(`Define: “${arg}”`)
+      case 'selection-park':
+        return session.dispatch({ type: 'park', item: { id: crypto.randomUUID(), kind: 'thought', title: arg.slice(0, 200), createdAt: Date.now() } })
+    }
+  }
+
+  function buildCommands(): Command[] {
+    const cmds: Command[] = []
+    const act = (id: string, title: string, run: () => void, keywords = '', hint?: string) => cmds.push({ id, title, run, keywords, hint, group: 'Actions' })
+    act('new-tab', 'New tab', newTab, 'open blank')
+    act('park-tab', 'Park this tab for later', () => parkTab(activeIdRef.current), 'save close later')
+    act('park-thought', 'Park a thought', () => setParkingOpen(true), 'note idea remember')
+    act('parking', 'Open parking lot', () => setParkingOpen(true), 'parked saved')
+    act('calm', 'I feel overwhelmed (calm view)', calmView, 'panic anxious too much stressed simplify')
+    act('reader', 'Open reader view', () => void reading.openReader(), 'simplify article summary tldr')
+    act('reading', 'Reading tools (fonts, line focus)', () => setReadingOpen(true), 'typography dyslexia ruler dim')
+    act('find', 'Find in page', openFind, 'search text')
+    act('focus', `${focusModeEnabled ? 'Turn off' : 'Turn on'} Focus mode`, () => void persistFocusMode(!focusModeEnabled), 'simplify')
+    act('settings', 'Settings', () => setSettingsOpen(true), 'preferences model ollama blocker')
+    act('assistant', sidebarOpen ? 'Hide assistant' : 'Show assistant', () => setSidebarOpen((v) => !v), 'chat sidebar')
+    if (session.state.current) {
+      act('end-goal', 'Finish this goal', endSession, 'done complete session')
+    } else {
+      act('new-goal', 'Set a goal', () => document.getElementById('cclear-goal-input')?.focus(), 'start session task')
+    }
+    for (const level of ['off', 'quiet', 'balanced', 'coach'] as const) {
+      act(`nudge-${level}`, `Check-ins: ${level}`, () => session.dispatch({ type: 'assistLevel', level }), 'nudges distraction')
+    }
+    for (const t of tabs) {
+      if (t.id === activeId) continue
+      cmds.push({ id: `tab-${t.id}`, title: `Switch to: ${t.title || t.url || 'New tab'}`, hint: t.url, group: 'Tabs', run: () => setActiveId(t.id) })
+    }
+    for (const p of session.state.parked.filter((x) => x.kind === 'tab')) {
+      cmds.push({ id: `parked-${p.id}`, title: `Reopen: ${p.title}`, hint: p.url, group: 'Parked', run: () => restoreParked(p) })
+    }
+    for (const url of [...recentHistory].reverse().slice(0, 15)) {
+      cmds.push({ id: `hist-${url}`, title: url.replace(/^https?:\/\/(www\.)?/, ''), group: 'History', run: () => navigateActive(url) })
+    }
+    return cmds
+  }
+
+  const paletteDynamic = (q: string): Command[] => {
+    const out: Command[] = []
+    const ask = q.replace(/^\/ask\s*/i, '')
+    out.push({ id: 'dyn-ask', title: `Ask CCLEAR: ${ask}`, group: 'Ask', run: () => { setSidebarOpen(true); void assistant.send(q) } })
+    if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(q) || /^https?:\/\//i.test(q)) {
+      out.push({ id: 'dyn-go', title: `Go to ${q}`, group: 'Actions', run: () => navigateActive(normalizeUrl(q)) })
+    }
+    out.push({ id: 'dyn-search', title: `Search the web for “${q}”`, group: 'Actions', run: () => openTabAt(`https://www.google.com/search?q=${encodeURIComponent(q)}`) })
+    out.push({ id: 'dyn-thought', title: `Park thought: ${q}`, group: 'Actions', run: () => session.dispatch({ type: 'park', item: { id: crypto.randomUUID(), kind: 'thought', title: q.slice(0, 200), createdAt: Date.now() } }) })
+    return out
+  }
+
+  // ── Session end, time accounting, tab diet, calm view ──────────────────────
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!session.state.current) return
+      const c = drift.takeCounters()
+      if (c.on || c.off || c.nudges) session.dispatch({ type: 'addTime', on: c.on, off: c.off, nudges: c.nudges })
+    }, 30000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.state.current?.id])
+
+  function endSession() {
+    const cur = session.state.current
+    if (!cur) return
+    const c = drift.takeCounters()
+    setRecap(
+      buildRecap({
+        session: cur,
+        now: Date.now(),
+        onSeconds: (cur.onSeconds ?? 0) + c.on,
+        offSeconds: (cur.offSeconds ?? 0) + c.off,
+        nudges: (cur.nudges ?? 0) + c.nudges,
+        parkedDuring: session.state.parked.filter((p) => p.createdAt >= cur.startedAt).length
+      })
+    )
+    session.dispatch({ type: 'addTime', on: c.on, off: c.off, nudges: c.nudges })
+    session.dispatch({ type: 'end', now: Date.now() })
+  }
+
+  /** Park several tabs at once (one state update, so nothing is closed twice). */
+  function parkMany(ids: string[]) {
+    const now = Date.now()
+    const doomed = tabsRef.current.filter((t) => ids.includes(t.id) && t.url && t.url !== 'about:blank')
+    if (!doomed.length) return
+    for (const t of doomed) {
+      session.dispatch({
+        type: 'park',
+        item: { id: crypto.randomUUID(), kind: 'tab', title: t.title || t.url, url: t.url, favicon: t.favicon, createdAt: now, scrollRatio: session.state.progress[progressKey(t.url)]?.ratio }
+      })
+    }
+    const remaining = tabsRef.current.filter((t) => !doomed.some((d) => d.id === t.id))
+    if (!remaining.length) {
+      const id = String(crypto.randomUUID())
+      setTabs([{ id, url: 'about:blank', src: 'about:blank', title: '' }])
+      setActiveId(id)
+    } else {
+      setTabs(remaining)
+      if (!remaining.some((t) => t.id === activeIdRef.current)) setActiveId(remaining[0].id)
+    }
+  }
+
+  const offTabIds = tabs.filter((t) => t.id !== activeId && drift.verdicts[t.id]?.verdict === 'off').map((t) => t.id)
+  const showDiet =
+    Boolean(session.state.current) && session.state.assistLevel !== 'off' && !drift.nudge && !recap &&
+    Date.now() > dietDismissedUntil && (offTabIds.length >= 3 || (tabs.length >= 8 && offTabIds.length >= 2))
+
+  /** "I feel overwhelmed": quiet everything, show only the next step, and open the simplest view of the page. */
+  function calmView() {
+    setSidebarOpen(false)
+    setParkingOpen(false)
+    setSettingsOpen(false)
+    setReadingOpen(false)
+    const next = session.state.current?.steps.find((x) => !x.done)
+    setCalmNote(next ? `Take a breath. One thing: ${next.text}` : session.state.current ? `Take a breath. One thing: ${session.state.current.goal}` : 'Take a breath. You only need to do one thing right now.')
+    void reading.openReader()
   }
 
   // Stable key for tab-grouping: only re-run when the set of URLs actually changes
   const tabUrlsKey = useMemo(() => tabs.map(t => t.url).sort().join('|'), [tabs])
 
   useEffect(() => {
-    if (tabs.length < 2) return
+    // Grouping costs a model call, so only do it once there are enough tabs to be worth tidying.
+    if (tabs.length < 4) return
     const currentTabs = tabsRef.current
     const items: TabContextItem[] = currentTabs.map(t => ({ id: t.id, title: t.title, url: t.url, isActive: t.id === activeIdRef.current }))
     const timer = setTimeout(async () => {
@@ -915,15 +1125,6 @@ export function App() {
     return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabUrlsKey, tabs.length])
-
-  useEffect(() => {
-    const api = window.cclearBrowser.ai
-    if (!api.onChatProgress) return
-    return api.onChatProgress((payload) => {
-      setChatThink(payload.think || '')
-      setChatDraft(payload.content || '')
-    })
-  }, [])
 
   // Keyboard shortcuts from native menu
   useEffect(() => {
@@ -984,6 +1185,12 @@ export function App() {
         case 'toggle-focus':
           void persistFocusModeRef.current(!focusModeEnabledRef.current)
           break
+        case 'park-tab':
+          parkTabRef.current(currentActiveId)
+          break
+        default:
+          shortcutExtraRef.current(action, args)
+          break
         case 'toggle-sidebar':
           setSidebarOpen(prev => !prev)
           break
@@ -1035,7 +1242,7 @@ export function App() {
   return (
     <div className="appShell">
       <div className="chrome">
-        <TabStrip tabs={tabs} activeId={activeId} setActiveId={setActiveId} onClose={(id) => closeTab(id)} onNewTab={newTab} />
+        <TabStrip tabs={tabs} activeId={activeId} setActiveId={setActiveId} onClose={(id) => closeTab(id)} onNewTab={newTab} verdicts={drift.verdicts} />
         <TopBar
           navUrl={navUrl}
           setNavUrl={setNavUrl}
@@ -1048,6 +1255,26 @@ export function App() {
             void persistFocusMode(typeof v === 'function' ? v(focusModeEnabled) : v)
           }}
           simplifyBusy={simplifyBusy}
+          readingOpen={readingOpen}
+          onToggleReading={() => setReadingOpen((v) => !v)}
+          blockedCount={blockedCount}
+          onOpenSettings={() => setSettingsOpen((v) => !v)}
+          onOpenPalette={() => setPaletteOpen(true)}
+        />
+        <SessionBar
+          session={session.state.current}
+          verdict={drift.verdicts[activeId]}
+          parkedCount={session.state.parked.length}
+          stepsLoading={stepsLoading}
+          onStart={(goal) => {
+            setStepsLoading(true)
+            void session.startGoal(goal).finally(() => setStepsLoading(false))
+          }}
+          onEnd={endSession}
+          onToggleStep={(id) => session.dispatch({ type: 'toggleStep', id })}
+          onAddStep={(text) => session.dispatch({ type: 'addStep', text, id: crypto.randomUUID() })}
+          onRemoveStep={(id) => session.dispatch({ type: 'removeStep', id })}
+          onOpenParking={() => setParkingOpen((v) => !v)}
         />
         <WebviewHost
           recentHistory={recentHistory}
@@ -1064,8 +1291,142 @@ export function App() {
             } catch { }
             setTabs(prev => prev.map(t => t.id === activeId ? { ...t, url: normalized, src: normalized, title: '', favicon: favicon || t.favicon } : t))
           }}
+          session={session.state.current}
+          parked={session.state.parked}
+          recentProgress={Object.values(session.state.progress).filter((p) => worthResuming(p, Date.now())).sort((a, b) => b.at - a.at).slice(0, 3)}
+          onStartGoal={(goal) => {
+            setStepsLoading(true)
+            void session.startGoal(goal).finally(() => setStepsLoading(false))
+          }}
+          onToggleStep={(id) => session.dispatch({ type: 'toggleStep', id })}
+          onRestoreParked={restoreParked}
+          overlay={
+            friction && friction.tabId === activeId ? (
+          <FrictionGate
+            host={friction.host}
+            goal={session.state.current?.goal}
+            onContinue={() => {
+              frictionPassed.current.set(`${friction.tabId}|${friction.host}`, Date.now())
+              try { webviewRefs.current[friction.tabId]?.setAudioMuted(false) } catch { /* */ }
+              setFriction(null)
+            }}
+            onLeave={() => {
+              const f = friction
+              setFriction(null)
+              try { webviewRefs.current[f.tabId]?.setAudioMuted(false) } catch { /* */ }
+              if (tabsRef.current.length > 1) closeTab(f.tabId)
+              else navigateActive('about:blank')
+            }}
+          />
+        ) : null
+          }
         />
+        {drift.nudge && session.state.current && (
+          <DriftNudge
+            nudge={drift.nudge}
+            goal={session.state.current.goal}
+            onBack={backToTask}
+            onRelevant={() => {
+              session.dispatch({ type: 'allowHost', host: drift.nudge!.host })
+              drift.dismissNudge()
+            }}
+            onPark={() => {
+              const id = drift.nudge!.tabId
+              drift.dismissNudge()
+              parkTab(id)
+            }}
+            onSnooze={() => drift.snoozeNudge()}
+            onDismiss={drift.dismissNudge}
+          />
+        )}
+        {showDiet && (
+          <TabDiet
+            total={tabs.length}
+            offCount={offTabIds.length}
+            onPark={() => parkMany(offTabIds)}
+            onDismiss={() => setDietDismissedUntil(Date.now() + 15 * 60_000)}
+          />
+        )}
+        {calmNote && (
+          <div className="resumeToast" role="status" aria-live="polite">
+            <span>{calmNote}</span>
+            <button type="button" className="nudgeLink" onClick={() => setCalmNote('')}>Dismiss</button>
+          </div>
+        )}
+        {resumeOffer && resumeOffer.tabId === activeId && !drift.nudge && (
+          <ResumeToast
+            text={describeProgress(resumeOffer.progress)}
+            onResume={() => {
+              void webviewRefs.current[resumeOffer.tabId]?.executeJavaScript(getScrollToRatioScript(resumeOffer.progress.ratio), true).catch(() => {})
+              setResumeOffer(null)
+            }}
+            onDismiss={() => setResumeOffer(null)}
+          />
+        )}
+        {readingOpen && (
+          <ReadingPanel
+            prefs={reading.prefs}
+            onChange={reading.update}
+            onReader={() => {
+              setReadingOpen(false)
+              void reading.openReader()
+            }}
+            readerError={reading.readerError}
+            focusModeOn={focusModeEnabled}
+            showingOriginal={reading.showingOriginal}
+            onToggleOriginal={() => void reading.toggleOriginal()}
+            onClose={() => setReadingOpen(false)}
+          />
+        )}
+        {findOpen && (
+          <FindBar open query={findQuery} setQuery={setFindQuery} activeMatch={findActive} matchCount={findCount} onFind={runFind} onClose={closeFind} />
+        )}
+        {settingsOpen && (
+          <SettingsPanel
+            assistLevel={session.state.assistLevel}
+            onAssistLevel={(level) => session.dispatch({ type: 'assistLevel', level })}
+            frictionHosts={session.state.frictionHosts}
+            onFriction={(host, on) => session.dispatch({ type: 'friction', host, on })}
+            blockerEnabled={blockerEnabled}
+            onBlockerEnabled={(on) => {
+              setBlockerEnabled(on)
+              void window.cclearBrowser.blocker.setEnabled(on)
+            }}
+            siteHost={activeSiteHost}
+            siteAllowed={session.state.blockerAllow.some((h) => activeSiteHost === h || activeSiteHost.endsWith(`.${h}`))}
+            onSiteAllowed={(on) => {
+              session.dispatch({ type: 'blockerAllow', host: activeSiteHost, on })
+              try { webviewRefs.current[activeIdRef.current]?.reload() } catch { /* */ }
+            }}
+            onClose={() => setSettingsOpen(false)}
+            onModelChanged={() => {
+              void window.cclearBrowser.ai.health().then((h) => setAiHealthy(h.ok)).catch(() => setAiHealthy(false))
+            }}
+          />
+        )}
+        {parkingOpen && (
+          <ParkingPanel
+            items={session.state.parked}
+            onClose={() => setParkingOpen(false)}
+            onRestore={restoreParked}
+            onDelete={(id) => session.dispatch({ type: 'unpark', id })}
+            onAddThought={(text) =>
+              session.dispatch({ type: 'park', item: { id: crypto.randomUUID(), kind: 'thought', title: text, createdAt: Date.now() } })
+            }
+          />
+        )}
       </div>
+      {recap && (
+        <SessionRecap
+          recap={recap}
+          onClose={() => setRecap(null)}
+          onNewGoal={() => {
+            setRecap(null)
+            setTimeout(() => document.getElementById('cclear-goal-input')?.focus(), 50)
+          }}
+        />
+      )}
+      {paletteOpen && <CommandPalette commands={buildCommands()} dynamic={paletteDynamic} onClose={() => setPaletteOpen(false)} />}
       <aside
         className="chatDrawer"
         id="cclear-chat-drawer"
@@ -1091,17 +1452,25 @@ export function App() {
             )}
           </button>
           <div className="chatPanel" id="cclear-chat-panel" aria-hidden={!sidebarOpen}>
-            <WhyAmIHereBox summaries={tabContexts[activeId] || []} isLoading={contextLoading[activeId] || false} />
+            {!session.state.current && (
+              <WhyAmIHereBox summaries={tabContexts[activeId] || []} isLoading={contextLoading[activeId] || false} />
+            )}
             <ChatSidebar
               aiHealthy={aiHealthy}
               aiHint="Runs fully local on your Mac when Ollama is installed."
-              messages={chatMsgs}
-              input={chatInput}
-              setInput={setChatInput}
-              sending={chatSending}
-              thinking={chatThink}
-              draft={chatDraft}
-              onSend={(o) => void handleSendChat(o)}
+              messages={assistant.messages}
+              input={assistant.input}
+              setInput={assistant.setInput}
+              sending={assistant.sending}
+              thinking={assistant.think}
+              draft={assistant.draft}
+              onSend={(o) => void assistant.send(o)}
+              onCancel={assistant.cancel}
+              onOpenSource={(src) => void assistant.openSource(src)}
+              onSwitchTab={setActiveId}
+              onOpenSetup={() => setSettingsOpen(true)}
+              onConfirmAction={(m, a) => void assistant.confirmAction(m, a)}
+              onDismissAction={assistant.dismissAction}
             />
           </div>
         </div>
