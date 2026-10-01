@@ -1,4 +1,4 @@
-import { DEFAULT_OLLAMA_HOST } from './ollamaClient'
+import { DEFAULT_OLLAMA_HOST, getKeepAlive } from './ollamaClient'
 
 export const EMBED_MODEL = process.env.CCLEAR_OLLAMA_EMBED_MODEL ?? 'nomic-embed-text'
 
@@ -21,7 +21,7 @@ async function embedRaw(inputs: string[], signal?: AbortSignal): Promise<number[
   const r = await fetch(`${DEFAULT_OLLAMA_HOST}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: EMBED_MODEL, input: inputs, keep_alive: '30m' }),
+    body: JSON.stringify({ model: EMBED_MODEL, input: inputs, keep_alive: getKeepAlive() }),
     signal: signal ?? AbortSignal.timeout(15000)
   })
   if (!r.ok) return null
