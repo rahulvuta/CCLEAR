@@ -8,6 +8,11 @@ type Props = {
   focusModeEnabled: boolean
   setFocusModeEnabled: (v: boolean | ((prev: boolean) => boolean)) => void | Promise<void>
   simplifyBusy?: boolean
+  readingOpen?: boolean
+  onToggleReading?: () => void
+  blockedCount?: number
+  onOpenSettings?: () => void
+  onOpenPalette?: () => void
 }
 
 export function TopBar(props: Props) {
@@ -20,7 +25,12 @@ export function TopBar(props: Props) {
     onReload,
     focusModeEnabled,
     setFocusModeEnabled,
-    simplifyBusy
+    simplifyBusy,
+    readingOpen,
+    onToggleReading,
+    blockedCount,
+    onOpenSettings,
+    onOpenPalette
   } = props
 
   return (
@@ -67,6 +77,26 @@ export function TopBar(props: Props) {
               </>
             )}
           </span>
+        )}
+        {typeof blockedCount === 'number' && blockedCount > 0 && (
+          <button type="button" className="shieldBtn" onClick={onOpenSettings} title="Ads and trackers blocked on this page">
+            {blockedCount} blocked
+          </button>
+        )}
+        {onOpenPalette && (
+          <button type="button" className="topReadBtn" onClick={onOpenPalette} title="Commands, tabs and questions (⌘K)" aria-label="Open command palette">
+            ⌘K
+          </button>
+        )}
+        {onToggleReading && (
+          <button type="button" className="topReadBtn" aria-expanded={readingOpen} onClick={onToggleReading} title="Reading tools: reader view, fonts, line focus">
+            Aa Reading
+          </button>
+        )}
+        {onOpenSettings && (
+          <button type="button" className="topReadBtn" onClick={onOpenSettings} aria-label="Settings" title="Settings">
+            Settings
+          </button>
         )}
         <label className="toggle">
           <input

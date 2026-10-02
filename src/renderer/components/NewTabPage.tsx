@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react'
 
+import type { ParkedItem, ReadingProgress, Session } from '../../shared/session'
+
+export type NewTabSessionProps = {
+  session: Session | null
+  parked: ParkedItem[]
+  recentProgress: ReadingProgress[]
+  onStartGoal: (goal: string) => void
+  onToggleStep: (id: string) => void
+  onRestoreParked: (item: ParkedItem) => void
+}
+
 type Props = {
   onNavigate: (url: string) => void
   recentHistory: string[]
-}
+} & NewTabSessionProps
 
 const DEFAULT_LINKS = [
   { name: 'Google', url: 'https://google.com' },
@@ -12,6 +23,22 @@ const DEFAULT_LINKS = [
   { name: 'GitHub', url: 'https://github.com' },
   { name: 'News', url: 'https://news.ycombinator.com' },
 ]
+
+function initialLinks() {
+  try {
+    const demo = localStorage.getItem('cclear.demoUrl')
+    if (demo) {
+      return [
+        { name: 'Industrial Revolution', url: `${demo}/industrial-revolution.html` },
+        { name: 'Minecraft clips', url: `${demo}/gaming-clips.html` },
+        { name: 'Wikipedia', url: 'https://wikipedia.org' }
+      ]
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULT_LINKS
+}
 
 const FOCUS_TIPS = [
   "Break big tasks into small bites.",
@@ -24,11 +51,16 @@ const FOCUS_TIPS = [
   "You don't have to finish — just start.",
 ]
 
-export function NewTabPage({ onNavigate, recentHistory }: Props) {
+let recommendedOnce = false
+
+export function NewTabPage({ onNavigate, recentHistory, session, parked, recentProgress, onStartGoal, onToggleStep, onRestoreParked }: Props) {
+  const [goalDraft, setGoalDraft] = useState('')
+  const [addingLink, setAddingLink] = useState(false)
+  const [linkDraft, setLinkDraft] = useState('')
   const [searchValue, setSearchValue] = useState('')
   const [tipIndex, setTipIndex] = useState(0)
   const [time, setTime] = useState(new Date())
-  const [links, setLinks] = useState(DEFAULT_LINKS)
+  const [links, setLinks] = useState(initialLinks)
 
   useEffect(() => {
     setTipIndex(Math.floor(Math.random() * FOCUS_TIPS.length))
@@ -37,7 +69,8 @@ export function NewTabPage({ onNavigate, recentHistory }: Props) {
   }, [])
 
   useEffect(() => {
-    if (!recentHistory || recentHistory.length === 0) return
+    if (recommendedOnce || !recentHistory || recentHistory.length === 0) return
+    recommendedOnce = true
     window.cclearBrowser.ai.recommendLinks(recentHistory).then((recs) => {
       if (recs && recs.length > 0) {
         setLinks(recs)
@@ -90,24 +123,24 @@ export function NewTabPage({ onNavigate, recentHistory }: Props) {
     setDraggedIdx(null)
   }
 
-  const handleAddLink = () => {
-    const url = prompt('Enter website URL (e.g., https://example.com):')
+  const handleAddLink = (e?: React.FormEvent) => {
+    e?.preventDefault()
+    const url = linkDraft.trim()
+    setAddingLink(false)
+    setLinkDraft('')
     if (!url) return
-    let finalUrl = url.trim()
+    let finalUrl = url
     if (!/^https?:\/\//i.test(finalUrl)) finalUrl = 'https://' + finalUrl
-    
     let name = 'New Link'
-    try { 
-      const host = new URL(finalUrl).hostname 
+    try {
+      const host = new URL(finalUrl).hostname
       name = host.startsWith('www.') ? host.slice(4) : host
       name = name.split('.')[0]
       name = name.charAt(0).toUpperCase() + name.slice(1)
-    } catch {}
-    
-    setLinks(prev => {
-      if (prev.length >= 6) return prev
-      return [...prev, { name, url: finalUrl }]
-    })
+    } catch {
+      return
+    }
+    setLinks((prev) => (prev.length >= 6 ? prev : [...prev, { name, url: finalUrl }]))
   }
 
   return (
@@ -129,6 +162,61 @@ export function NewTabPage({ onNavigate, recentHistory }: Props) {
 
         {/* Greeting */}
         <p className="ntpGreeting">{greeting}</p>
+
+        {/* Goal-centric home */}
+        {session ? (
+          <section className="ntpGoal" aria-label="Your goal">
+            <div className="ntpGoalLabel">Right now</div>
+            <div className="ntpGoalText">{session.goal}</div>
+            {session.steps.length > 0 && (
+              <ul className="ntpSteps">
+                {session.steps.map((st) => (
+                  <li key={st.id}>
+                    <label>
+                      <input type="checkbox" checked={st.done} onChange={() => onToggleStep(st.id)} />
+                      <span className={st.done ? 'stepDone' : ''}>{st.text}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(() => {
+              const next = session.steps.find((x) => !x.done)
+              return next ? <div className="ntpNext">Next: {next.text}</div> : null
+            })()}
+          </section>
+        ) : (
+          <form
+            className="ntpGoalForm"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (goalDraft.trim()) {
+                onStartGoal(goalDraft)
+                setGoalDraft('')
+              }
+            }}
+          >
+            <label htmlFor="ntp-goal" className="ntpGoalLabel">What are you here to do?</label>
+            <input id="ntp-goal" className="ntpSearchInput ntpGoalInput" value={goalDraft} onChange={(e) => setGoalDraft(e.target.value)} placeholder="One sentence is enough" maxLength={200} />
+          </form>
+        )}
+
+        {(parked.length > 0 || recentProgress.length > 0) && (
+          <section className="ntpResume" aria-label="Pick up where you left off">
+            {recentProgress.map((p) => (
+              <button key={p.url} type="button" className="ntpResumeItem" onClick={() => onNavigate(p.url)} title={p.url}>
+                <span className="ntpResumeTitle">{p.title || p.url}</span>
+                <span className="ntpResumeMeta">{p.heading ? `${p.heading} · ` : ''}{Math.round(p.ratio * 100)}% read</span>
+              </button>
+            ))}
+            {parked.filter((x) => x.kind === 'tab').slice(0, 3).map((it) => (
+              <button key={it.id} type="button" className="ntpResumeItem" onClick={() => onRestoreParked(it)} title={it.url}>
+                <span className="ntpResumeTitle">{it.title}</span>
+                <span className="ntpResumeMeta">Parked</span>
+              </button>
+            ))}
+          </section>
+        )}
 
         {/* Search */}
         <form className="ntpSearchForm" onSubmit={handleSearch}>
@@ -194,11 +282,16 @@ export function NewTabPage({ onNavigate, recentHistory }: Props) {
               </div>
             )
           })}
-          {links.length < 6 && (
+          {addingLink && (
+            <form className="ntpAddForm" onSubmit={handleAddLink}>
+              <input className="sessionInput" autoFocus value={linkDraft} onChange={(e) => setLinkDraft(e.target.value)} onBlur={() => handleAddLink()} placeholder="example.com" />
+            </form>
+          )}
+          {links.length < 6 && !addingLink && (
             <div className="ntpLinkWrapper" style={{ opacity: draggedIdx !== null ? 0 : 1, transition: 'opacity 0.2s' }}>
               <button
                 className="ntpLinkCard ntpLinkAdd"
-                onClick={handleAddLink}
+                onClick={() => setAddingLink(true)}
                 title="Add shortcut"
               >
                 <div style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 }}>
