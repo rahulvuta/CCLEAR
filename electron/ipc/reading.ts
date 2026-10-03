@@ -35,7 +35,8 @@ export function registerReadingIpc() {
         temperature: 0.1,
         numPredict: 400,
         numCtx: 8192,
-        timeoutMs: 45000
+        timeoutMs: 45000,
+        priority: 'interactive'
       })
       const parsed = JSON.parse(raw) as { tldr?: unknown; points?: unknown }
       const out = validateSummary(parsed, text, dropsNumericDetails)
