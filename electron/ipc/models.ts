@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import os from 'node:os'
-import { DEFAULT_OLLAMA_HOST, DEFAULT_VISION_MODEL, getActiveModel, setActiveModel } from '../../src/ai/ollamaClient'
+import { DEFAULT_OLLAMA_HOST, DEFAULT_VISION_MODEL, getActiveModel, isEco, setActiveModel } from '../../src/ai/ollamaClient'
 import { hasModel, recommendModel } from '../../src/ai/modelAdvice'
 import { pickReviewer } from '../../src/ai/simplifyBlocks'
 import { getPrefs, setPrefs } from './prefs'
@@ -36,7 +36,7 @@ async function status(): Promise<ModelStatus> {
     return {
       ...base,
       ollama: true,
-      simplifyChecks: pickReviewer(names, ramGB).model ?? 'rules',
+      simplifyChecks: isEco() ? 'rules' : (pickReviewer(names, ramGB).model ?? 'rules'),
       installed,
       activeInstalled: hasModel(names, base.active),
       visionInstalled: hasModel(names, base.vision)

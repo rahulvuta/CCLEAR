@@ -10,7 +10,57 @@ export function getActiveModel(): string {
 }
 export const DEFAULT_VISION_MODEL = process.env.CCLEAR_OLLAMA_VISION_MODEL ?? 'llava:latest'
 /** Keep the model resident between requests so follow-ups skip the load time. */
-export const KEEP_ALIVE = process.env.CCLEAR_OLLAMA_KEEP_ALIVE ?? '30m'
+let keepAlive = process.env.CCLEAR_OLLAMA_KEEP_ALIVE ?? '30m'
+let eco = false
+
+/**
+ * Eco mode (default on in the app) frees the model from memory sooner and skips the heavy second-model
+ * reviewer, trading a little speed and strictness for far less GPU/RAM use.
+ */
+export function setEco(on: boolean) {
+  eco = on
+  keepAlive = process.env.CCLEAR_OLLAMA_KEEP_ALIVE ?? (on ? '3m' : '30m')
+}
+export const isEco = () => eco
+export const getKeepAlive = () => keepAlive
+
+export type Priority = 'interactive' | 'background'
+const waiting: Array<{ interactive: boolean; go: () => void }> = []
+let running = 0
+/** One model call at a time: concurrent calls only make every one of them (and the GPU) slower. */
+const MAX_CONCURRENT = 1
+
+function pump() {
+  while (running < MAX_CONCURRENT && waiting.length) {
+    const i = waiting.findIndex((w) => w.interactive)
+    const [job] = waiting.splice(i >= 0 ? i : 0, 1)
+    running++
+    job.go()
+  }
+}
+
+/** Interactive requests (the user is waiting) go to the front of the line; background work waits its turn. */
+export function withSlot<T>(priority: Priority, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const job = {
+      interactive: priority === 'interactive',
+      go: () => {
+        if (signal?.aborted) {
+          running--
+          pump()
+          reject(new Error('Cancelled'))
+          return
+        }
+        fn().then(resolve, reject).finally(() => {
+          running--
+          pump()
+        })
+      }
+    }
+    waiting.push(job)
+    pump()
+  })
+}
 
 /** Abort `ctl` when an external signal fires (user pressed Cancel). */
 function linkSignal(ctl: AbortController, signal?: AbortSignal) {
@@ -99,7 +149,7 @@ export async function ollamaChat(params: {
   return stripThink(data.message?.content?.trim() ?? '')
 }
 
-export async function ollamaVisionChat(params: {
+async function ollamaVisionChatRaw(params: {
   host?: string
   model?: string
   system?: string
@@ -141,7 +191,7 @@ export async function ollamaVisionChat(params: {
         model,
         messages,
         stream: false,
-        keep_alive: KEEP_ALIVE,
+        keep_alive: keepAlive,
         options: {
           temperature: params.temperature ?? 0.2
         }
@@ -167,7 +217,7 @@ export async function ollamaVisionChat(params: {
   }
 }
 
-export async function ollamaGenerate(params: {
+async function ollamaGenerateRaw(params: {
   host?: string
   model?: string
   system: string
@@ -181,6 +231,7 @@ export async function ollamaGenerate(params: {
   /** Abort slow generations (defaults 30s; chat uses explicit longer timeout) */
   timeoutMs?: number
   signal?: AbortSignal
+  priority?: Priority
 }): Promise<string> {
   const host = params.host ?? DEFAULT_OLLAMA_HOST
   const model = params.model ?? activeModel
@@ -216,7 +267,7 @@ export async function ollamaGenerate(params: {
         raw: directQwen ? true : undefined,
         stream: false,
         think: false,
-        keep_alive: KEEP_ALIVE,
+        keep_alive: keepAlive,
         format: params.format,
         options
       })
@@ -239,6 +290,14 @@ export async function ollamaGenerate(params: {
   } finally {
     clearTimeout(abortTimer)
   }
+}
+
+export function ollamaVisionChat(params: Parameters<typeof ollamaVisionChatRaw>[0]): Promise<string> {
+  return withSlot('interactive', () => ollamaVisionChatRaw(params), params.signal)
+}
+
+export function ollamaGenerate(params: Parameters<typeof ollamaGenerateRaw>[0]): Promise<string> {
+  return withSlot(params.priority ?? 'background', () => ollamaGenerateRaw(params), params.signal)
 }
 
 export type ChatGenProgress = { think: string; content: string }
