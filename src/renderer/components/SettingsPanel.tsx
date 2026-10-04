@@ -9,6 +9,8 @@ type Props = {
   onAssistLevel: (l: AssistLevel) => void
   frictionHosts: string[]
   onFriction: (host: string, on: boolean) => void
+  eco: boolean
+  onEco: (on: boolean) => void
   blockerEnabled: boolean
   onBlockerEnabled: (on: boolean) => void
   siteHost: string
@@ -133,6 +135,17 @@ export function SettingsPanel(p: Props) {
           </>
         )}
         <button type="button" className="nudgeLink" onClick={refresh}>Refresh</button>
+      </section>
+
+      <section className="setSection">
+        <h3>Performance</h3>
+        <label className="readSwitch">
+          <input type="checkbox" checked={p.eco} onChange={(e) => { p.onEco(e.target.checked); setTimeout(refresh, 200) }} />
+          <span>Lighter on my computer</span>
+        </label>
+        <p className="parkHint">
+          Unloads the AI model from memory after 3 idle minutes (instead of 30), runs one AI task at a time, simplifies only what you are about to read, and skips the larger second model. Turn it off to let a larger installed model (qwen3:8b) double-check rewrites; that is slower and stricter, so it simplifies noticeably less.
+        </p>
       </section>
 
       <section className="setSection">

@@ -273,8 +273,9 @@ async function createWindow() {
       nodeIntegration: false,
       webviewTag: true,
       zoomFactor: 1.0,
-      /* Keeps inactive webviews and timers more responsive while browsing */
-      backgroundThrottling: false
+      /* Throttle timers and rendering when the window is hidden or minimized, to save CPU/GPU */
+      // CCLEAR_E2E=1 (set only by the automated tests, whose window sits behind other windows) opts out
+      backgroundThrottling: process.env.CCLEAR_E2E !== '1'
     }
   })
 
