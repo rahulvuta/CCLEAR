@@ -39,16 +39,24 @@ export function clampSummaryWords(summary: string, maxWords = MAX_SUMMARY_WORDS)
   return clipAtBoundary(summary, maxWords)
 }
 
-/** Scale with the block; a fixed cap loses most of a long paragraph. */
+/**
+ * How hard to cut. The longer the paragraph, the harder: a 150-word wall should become ~50 words,
+ * while a 25-word sentence only needs a light trim. (The old flat 50-75% left big paragraphs big.)
+ */
+function compression(n: number): { min: number; max: number; target: number } {
+  if (n <= MIN_KEEP_WORDS) return { min: n, max: n, target: n }
+  // target = what we ask the model for (aggressive); max = the most we will still accept (a real cut, not a trim);
+  // min = a floor so a rewrite cannot throw the content away. Models undershoot hard targets, so max is looser.
+  const [floor, ceil, mid] = n <= 30 ? [0.4, 0.85, 0.62] : n <= 60 ? [0.2, 0.7, 0.45] : [0.15, 0.6, 0.33]
+  return { min: Math.max(MIN_KEEP_WORDS - 2, Math.ceil(n * floor)), max: Math.floor(n * ceil), target: Math.round(n * mid) }
+}
+
 export function targetWordBudget(sourceWords: number): number {
-  if (sourceWords <= MIN_KEEP_WORDS) return sourceWords
-  return Math.round(sourceWords * 0.62)
+  return compression(sourceWords).target
 }
 
 export function summaryWordRange(text: string): { min: number; max: number; target: number } {
-  const n = wordCount(stripWikiCites(text))
-  if (n <= MIN_KEEP_WORDS) return { min: n, max: n, target: n }
-  return { min: Math.ceil(n * 0.5), max: Math.floor(n * 0.75), target: targetWordBudget(n) }
+  return compression(wordCount(stripWikiCites(text)))
 }
 
 /** Drop Wikipedia-style [16] markers; they are not part of the claim. */
@@ -517,13 +525,10 @@ export function finalizeModelSimplify(
   if (shouldSkipChromeText(source) || !isProseBlock(source)) return keepOriginal(source)
 
   const sourceWords = wordCount(source)
-  const budget = summaryWordRange(source).max
+  const range = summaryWordRange(source)
   const s = stripWikiCites(summary.trim()).replace(/\s+/g, ' ')
   const summaryWords = wordCount(s)
-  if (
-    sourceWords > MIN_KEEP_WORDS &&
-    (summaryWords > budget || summaryWords < Math.ceil(sourceWords * 0.5))
-  ) {
+  if (sourceWords > MIN_KEEP_WORDS && (summaryWords > range.max || summaryWords < range.min)) {
     return heuristicSummarizeParagraph(source)
   }
   if (!s || !isFaithfulSummary(source, s)) {
