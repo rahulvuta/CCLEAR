@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSimplifier, needsReview, pickReviewer, rewriteIssues } from '../../src/ai/simplifyBlocks'
+import { createSimplifier, needsReview, numberCores, numberIssues, pickReviewer, rewriteIssues } from '../../src/ai/simplifyBlocks'
 import { heuristicSummarizeParagraph, summaryWordRange } from '../../src/focus/heuristicSimplify'
 import { automotiveEngine } from '../fixtures/automotiveEngine'
 
@@ -9,11 +9,19 @@ const good = 'Steam engines turn heat into mechanical motion. Boilers boil water
 function response(key: string, rows: unknown[]) { return JSON.stringify({ [key]: rows }) }
 
 describe('Focus rewrite pipeline', () => {
-  it('uses a percentage budget even for long blocks', () => {
-    const range = summaryWordRange(automotiveEngine.find((c) => c.id === 'history')!.text)
-    expect(range.min).toBeGreaterThan(40)
-    expect(range.target).toBeGreaterThan(range.min)
+  it('cuts long blocks much harder than short ones', () => {
+    const long = automotiveEngine.find((c) => c.id === 'history')!.text
+    const words = long.split(/\s+/).length
+    const range = summaryWordRange(long)
+    expect(words).toBeGreaterThan(100)
+    expect(range.target / words).toBeLessThan(0.4) // a wall of text becomes about a third
+    expect(range.min).toBeLessThan(range.target)
     expect(range.target).toBeLessThan(range.max)
+    const mid = summaryWordRange(Array(45).fill('word').join(' '))
+    const short = summaryWordRange(Array(20).fill('word').join(' '))
+    expect(range.target / words).toBeLessThan(mid.target / 45)
+    expect(mid.target / 45).toBeLessThan(short.target / 20)
+    expect(summaryWordRange('A short line.')).toEqual({ min: 3, max: 3, target: 3 })
   })
 
   it('processes all blocks, sends text beyond 900 characters, and caches only validated results', async () => {
@@ -113,6 +121,22 @@ describe('Focus rewrite pipeline', () => {
       expect(pickReviewer(['qwen3:4b', 'qwen3:8b'], 16)).toEqual({ model: 'qwen3:8b', strict: true })
       expect(pickReviewer(['qwen3:4b', 'qwen3:8b'], 8)).toEqual({ strict: false })
       expect(pickReviewer(['qwen3:4b'], 32)).toEqual({ strict: false })
+    })
+  })
+
+  describe('number rules', () => {
+    it('compares numbers by digits, not formatting', () => {
+      expect(numberCores('In 1,769 and the 1800s, the 20th century saw 3.5% growth')).toEqual(['1769', '1800', '20', '3.5'])
+    })
+    it('never allows invented numbers', () => {
+      expect(numberIssues('Watt patented it in 1769.', 'Watt patented it in 1796.')).toEqual(expect.arrayContaining([expect.stringContaining('not present')]))
+    })
+    it('short blocks must keep all numbers; long blocks must keep at least half', () => {
+      const short = 'Watt patented the engine in 1769 and sold 450 of them by 1800.'
+      expect(numberIssues(short, 'Watt patented the engine in 1769.')).toEqual(expect.arrayContaining([expect.stringContaining('Restore all')]))
+      const long = Array(70).fill('word').join(' ') + ' In 1712 and 1769 and 1800 and 1830 it changed.'
+      expect(numberIssues(long, 'It changed in 1712 and 1769.')).toEqual([])
+      expect(numberIssues(long, 'It changed in 1712.')).toEqual(expect.arrayContaining([expect.stringContaining('Restore all')]))
     })
   })
 })
