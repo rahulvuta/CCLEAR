@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import type { WebviewTag } from 'electron'
 import type { UITab } from './TabStrip'
-import { NewTabPage } from './NewTabPage'
+import { NewTabPage, type NewTabSessionProps } from './NewTabPage'
 
 type Props = {
   tabs: UITab[]
@@ -9,9 +9,9 @@ type Props = {
   setWebviewRef: (id: string, el: WebviewTag | null) => void
   onNavigate: (url: string) => void
   recentHistory: string[]
-}
+} & NewTabSessionProps & { overlay?: ReactNode }
 
-export function WebviewHost({ tabs, activeId, setWebviewRef, onNavigate, recentHistory }: Props) {
+export function WebviewHost({ tabs, activeId, setWebviewRef, onNavigate, recentHistory, overlay, ...sessionProps }: Props) {
   useEffect(() => {
     const w = document.querySelector(`webview[data-tab="${CSS.escape(activeId)}"]`) as WebviewTag | null
     if (!w) return
@@ -59,7 +59,8 @@ export function WebviewHost({ tabs, activeId, setWebviewRef, onNavigate, recentH
           />
         )
       })}
-      {showNewTab && <NewTabPage onNavigate={onNavigate} recentHistory={recentHistory} />}
+      {overlay}
+      {showNewTab && <NewTabPage onNavigate={onNavigate} recentHistory={recentHistory} {...sessionProps} />}
     </main>
   )
 }

@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PagePassageSnapshot, PagePassageSelection } from '../src/ai/pageActions'
+import type { ProposedAction } from '../src/ai/tools'
+import type { SessionState } from '../src/shared/session'
+import type { ReaderSummary } from '../src/shared/reading'
 import type { ChatMessage, Prefs, TabContextItem, SimplifyChunk, SimplifyResult, TabGroupAssignment, TabContextSummary } from '../src/shared/types'
 
 contextBridge.exposeInMainWorld('cclearBrowser', {
@@ -11,14 +14,18 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
     selectPagePassages: (query: string, snapshot: PagePassageSnapshot): Promise<PagePassageSelection> =>
       ipcRenderer.invoke('ai:select-page-passages', { query, snapshot }),
     health: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('ai:health'),
-    chat: (
-      messages: ChatMessage[],
-      tabs: TabContextItem[],
-      activeTabId?: string,
-      screenText?: string,
+    assist: (payload: {
+      requestId: string
+      messages: ChatMessage[]
+      tabs: TabContextItem[]
+      activeTabId?: string
+      screenText?: string
       screenImageBase64?: string
-    ): Promise<string> =>
-      ipcRenderer.invoke('ai:chat', { messages, tabs, activeTabId, screenText, screenImageBase64 }),
+      goal?: string
+    }): Promise<{ text: string; actions: ProposedAction[] }> => ipcRenderer.invoke('ai:assist', payload),
+    cancel: (requestId: string): Promise<void> => ipcRenderer.invoke('ai:cancel', requestId),
+    askTabs: (p: { requestId: string; question: string; tabs: Array<{ id: string; title: string; url: string; text: string }> }) => ipcRenderer.invoke('ai:ask-tabs', p),
+    askPage: (p: { requestId: string; question: string; snapshot: PagePassageSnapshot }) => ipcRenderer.invoke('ai:ask-page', p),
     onChatProgress: (callback: (payload: { think: string; content: string }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: { think: string; content: string }) => {
         callback(payload)
@@ -33,6 +40,37 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
     groupTabs: (tabs: TabContextItem[]): Promise<TabGroupAssignment[]> => ipcRenderer.invoke('ai:group-tabs', tabs),
     inferContext: (url: string, title: string, historyUrls: string[]): Promise<TabContextSummary> => ipcRenderer.invoke('ai:infer-context', { url, title, historyUrls }),
     recommendLinks: (historyUrls: string[]): Promise<{ name: string; url: string }[]> => ipcRenderer.invoke('ai:recommend-links', historyUrls)
+  },
+  session: {
+    load: (): Promise<SessionState | null> => ipcRenderer.invoke('session:load'),
+    save: (state: SessionState): Promise<boolean> => ipcRenderer.invoke('session:save', state),
+    suggestSteps: (goal: string): Promise<string[]> => ipcRenderer.invoke('session:suggest-steps', goal),
+    judge: (p: { goal: string; steps?: string[]; title: string; url: string; text?: string }): Promise<{ relevant: boolean; why: string } | null> =>
+      ipcRenderer.invoke('session:judge', p)
+  },
+  ledger: {
+    get: () => ipcRenderer.invoke('ledger:get')
+  },
+  app: {
+    info: (): Promise<{ version: string; demo: boolean; demoUrl: string }> => ipcRenderer.invoke('app:info')
+  },
+  models: {
+    status: () => ipcRenderer.invoke('models:status'),
+    select: (name: string): Promise<boolean> => ipcRenderer.invoke('models:select', name),
+    pull: (name: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('models:pull', name),
+    cancelPull: (name: string): Promise<void> => ipcRenderer.invoke('models:cancel-pull', name),
+    onPullProgress: (cb: (p: { name: string; status: string; completed: number; total: number }) => void) => {
+      const h = (_e: Electron.IpcRendererEvent, p: { name: string; status: string; completed: number; total: number }) => cb(p)
+      ipcRenderer.on('models:pull-progress', h)
+      return () => { ipcRenderer.removeListener('models:pull-progress', h) }
+    }
+  },
+  blocker: {
+    count: (wcId: number): Promise<number> => ipcRenderer.invoke('blocker:count', wcId),
+    setEnabled: (on: boolean): Promise<void> => ipcRenderer.invoke('blocker:set-enabled', on)
+  },
+  reading: {
+    summarize: (p: { url: string; title: string; text: string }): Promise<ReaderSummary> => ipcRenderer.invoke('reading:summarize', p)
   },
   onShortcut: (callback: (action: string, ...args: unknown[]) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, action: string, ...args: unknown[]) => {

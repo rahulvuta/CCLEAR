@@ -56,7 +56,8 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
         id: id,
         text: t,
         outerHtmlLength: el.outerHTML.length,
-        tagName: el.tagName.toLowerCase()
+        tagName: el.tagName.toLowerCase(),
+        y: Math.round(el.getBoundingClientRect().top + window.scrollY)
       });
     }
     let candidates;
@@ -166,6 +167,24 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
       el.innerHTML = item.__html;
       count++;
     }
+    if (!window.__cclearOrigClick) {
+      window.__cclearOrigClick = true;
+      document.addEventListener('click', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('[data-cclear-simplified]') : null;
+        if (!el || e.target.closest('a')) return;
+        if (String(window.getSelection && window.getSelection()) !== '') return;
+        const orig = el.getAttribute('data-cclear-original-html');
+        if (orig == null) return;
+        if (el.getAttribute('data-cclear-view') === 'original') {
+          el.innerHTML = el.getAttribute('data-cclear-simplified-html') || el.innerHTML;
+          el.removeAttribute('data-cclear-view');
+        } else {
+          el.setAttribute('data-cclear-simplified-html', el.innerHTML);
+          el.innerHTML = orig;
+          el.setAttribute('data-cclear-view', 'original');
+        }
+      });
+    }
     return count;
   })();`
 }
@@ -181,6 +200,35 @@ export function buildRestoreSummariesScript(): string {
       }
       el.removeAttribute('data-cclear-simplified');
       el.removeAttribute('data-cclear-original-html');
+      el.removeAttribute('data-cclear-simplified-html');
+      el.removeAttribute('data-cclear-view');
     }
+  })();`
+}
+
+/**
+ * Swap every simplified block between the simplified text and the page's own original markup.
+ * The original is already kept in data-cclear-original-html, so nothing is ever lost.
+ */
+export function buildToggleOriginalScript(showOriginal: boolean): string {
+  return `(() => {
+    const want = ${JSON.stringify(showOriginal)};
+    let n = 0;
+    for (const el of Array.from(document.querySelectorAll('[data-cclear-simplified]'))) {
+      const orig = el.getAttribute('data-cclear-original-html');
+      if (orig == null) continue;
+      const showing = el.getAttribute('data-cclear-view') === 'original';
+      if (want && !showing) {
+        el.setAttribute('data-cclear-simplified-html', el.innerHTML);
+        el.innerHTML = orig;
+        el.setAttribute('data-cclear-view', 'original');
+        n++;
+      } else if (!want && showing) {
+        el.innerHTML = el.getAttribute('data-cclear-simplified-html') || el.innerHTML;
+        el.removeAttribute('data-cclear-view');
+        n++;
+      }
+    }
+    return n;
   })();`
 }
