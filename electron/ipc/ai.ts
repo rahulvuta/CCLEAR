@@ -17,12 +17,13 @@ import { selectPagePassages } from '../../src/ai/pagePassages'
 import type { PagePassageSnapshot } from '../../src/ai/pageActions'
 import os from 'node:os'
 import { createSimplifier, pickReviewer } from '../../src/ai/simplifyBlocks'
-import { listInstalledModels } from '../../src/ai/ollamaClient'
+import { isEco, listInstalledModels } from '../../src/ai/ollamaClient'
 import { buildRouterSystem, parseRouterOutput, ROUTER_SCHEMA } from '../../src/ai/router'
 import { parseLegacyTags, proposeActions, stripLegacyTags, type ProposedAction, type ToolCall } from '../../src/ai/tools'
 import { extractUrlsFromLookup } from '../../src/ai/navigationSanitize'
 import { ASK_SCHEMA, buildAskPrompt, buildAskSystem, hasEvidence, parseAsk, rankPassages, type AskResult } from '../../src/ai/askPage'
 import { dropsNumericDetails } from '../../src/focus/heuristicSimplify'
+import { simplifySentences, type SentenceIn } from '../../src/ai/sentenceSimplify'
 import { semanticScores } from '../../src/ai/embeddings'
 import { buildTabsPrompt, buildTabsSystem, parseTabsAnswer, pickExcerpts, TABS_SCHEMA, type TabText } from '../../src/ai/askTabs'
 
@@ -183,6 +184,7 @@ async function runAssist(
         temperature: 0.1,
         numPredict: hasAction ? 100 : 200,
         timeoutMs: CHAT_TIMEOUT_MS,
+        priority: 'interactive',
         signal
       })
       return {
@@ -205,6 +207,7 @@ async function runAssist(
       temperature: 0.15,
       numPredict: 300,
       timeoutMs: CHAT_TIMEOUT_MS,
+      priority: 'interactive',
       signal
     })
     const { say, calls } = parseRouterOutput(raw)
@@ -216,7 +219,7 @@ async function runAssist(
 
 export function registerAiIpc() {
   ipcMain.handle('ai:select-page-passages', async (_evt, payload: { query: string; snapshot: PagePassageSnapshot }) => {
-    return selectPagePassages(payload.query, payload.snapshot, undefined, (completed, total) => {
+    return selectPagePassages(payload.query, payload.snapshot, (p) => ollamaGenerate({ ...p, priority: 'interactive' }), (completed, total) => {
       if (!_evt.sender.isDestroyed()) {
         _evt.sender.send('ai:chat-progress', {
           think: '',
@@ -271,6 +274,7 @@ export function registerAiIpc() {
           numPredict: 260,
           numCtx: 4096,
           timeoutMs: 40000,
+          priority: 'interactive',
           signal: ctl.signal
         })
         const parsed = parseAsk(raw, ranked, dropsNumericDetails)
@@ -304,6 +308,7 @@ export function registerAiIpc() {
           numPredict: 300,
           numCtx: 4096,
           timeoutMs: 45000,
+          priority: 'interactive',
           signal: ctl.signal
         })
         const parsed = parseTabsAnswer(raw, tabs.length)
@@ -321,6 +326,17 @@ export function registerAiIpc() {
     }
   )
 
+  /** Simplify just the sentences the user selected. Interactive priority: the user is waiting on it. */
+  ipcMain.handle('ai:simplify-sentences', async (_evt, sentences: SentenceIn[]) => {
+    const list = (Array.isArray(sentences) ? sentences : [])
+      .filter((s) => s && typeof s.id === 'string' && typeof s.text === 'string')
+      .slice(0, 60)
+      .map((s) => ({ id: s.id, text: s.text.slice(0, 1200) }))
+    if (!list.length) return []
+    if (!(await checkOllamaHealth()).ok) throw new Error('The local AI is not running. Start Ollama to simplify text.')
+    return simplifySentences(ollamaGenerate, list)
+  })
+
   ipcMain.handle('ai:cancel', (_evt, requestId: string) => {
     inflight.get(requestId)?.abort()
   })
@@ -336,7 +352,8 @@ export function registerAiIpc() {
   let simplifier = createSimplifier(ollamaGenerate, { review: 'never' })
   let simplifierKey = 'default'
   ipcMain.handle('ai:simplify-chunks', async (_evt, chunks: SimplifyChunk[]) => {
-    const reviewer = pickReviewer(await listInstalledModels(), os.totalmem() / 1024 ** 3)
+    // Eco mode skips the second, larger model: it keeps GPU/RAM use low at the cost of model fact-checking.
+    const reviewer = isEco() ? { strict: false } : pickReviewer(await listInstalledModels(), os.totalmem() / 1024 ** 3)
     const key = JSON.stringify(reviewer)
     if (key !== simplifierKey) {
       simplifier = createSimplifier(ollamaGenerate, { review: reviewer.model ? 'selective' : 'never', reviewer })
