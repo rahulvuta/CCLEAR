@@ -30,7 +30,7 @@ export function getExtractChunksScript(minChars = 140, isSearch = false): string
     const blocks = [];
     function pushBlock(el, minLen) {
       if (SKIP.has(el.tagName)) return;
-      if (el.closest('[data-cclear-simplified]')) return;
+      if (el.closest('[data-cclear-simplified], [data-cclear-user-restored], .cclear-sel')) return;
       if (!el.closest(contentShell)) return;
       if (el.closest(avoidSel)) return;
       if (el.closest(chromeSel)) return;
@@ -154,7 +154,7 @@ export function buildApplySummariesScript(items: ApplySummaryItem[], isSearch = 
     for (const item of payload) {
       let el = item.id ? document.querySelector('[data-cclear-src-id="' + item.id + '"]') : null;
       if (!el) el = findByOriginal(item);
-      if (!el) continue;
+      if (!el || el.hasAttribute('data-cclear-user-restored')) continue;
       if (item.id) el.setAttribute('data-cclear-src-id', item.id);
       if (el.getAttribute('data-cclear-simplified')) {
         count++;

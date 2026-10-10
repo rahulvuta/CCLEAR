@@ -24,6 +24,7 @@ export type CCLEARApi = {
       goal?: string
     }): Promise<{ text: string; actions: ProposedAction[] }>
     cancel(requestId: string): Promise<void>
+    simplifySentences(sentences: Array<{ id: string; text: string }>): Promise<Array<{ id: string; text: string; changed: boolean }>>
     askTabs(p: { requestId: string; question: string; tabs: Array<{ id: string; title: string; url: string; text: string }> }): Promise<{ answer: string; sources: Array<{ n: number; tabId: string; title: string; url: string }> }>
     askPage(p: { requestId: string; question: string; snapshot: PagePassageSnapshot }): Promise<
       { kind: 'none' } | { kind: 'answer'; answer: string; grounded: boolean; sources: Array<{ n: number; id: string; text: string; context: string }> }
