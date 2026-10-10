@@ -51,7 +51,8 @@ export function registerSessionIpc() {
         directJson: true,
         temperature: 0.3,
         numPredict: 220,
-        timeoutMs: 20000
+        timeoutMs: 20000,
+        priority: 'interactive'
       })
       const parsed = parseJson<{ steps?: unknown }>(raw)
       return Array.isArray(parsed?.steps) ? parsed.steps.filter((s): s is string => typeof s === 'string').slice(0, 6) : []

@@ -59,4 +59,6 @@ export type Prefs = {
   reading?: ReadingPrefs
   /** Ollama model chosen in Settings. */
   aiModel?: string
+  /** Lighter on the computer: models unload sooner, no second reviewer model, gentler background work. Default on. */
+  eco?: boolean
 }
