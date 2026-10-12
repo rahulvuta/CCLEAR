@@ -800,35 +800,25 @@ input.switch:active {
   overflow: hidden;
 }
 .ntpOrb {
+  /* Static soft gradients. The old blurred, forever-animated orbs forced the GPU to re-rasterize every frame. */
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.12;
-  animation: ntpFloat 20s ease-in-out infinite;
+  opacity: 0.16;
 }
 .ntpOrb1 {
-  width: 340px; height: 340px;
-  background: var(--accent);
-  top: -80px; left: 10%;
-  animation-delay: 0s;
+  width: 520px; height: 520px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 68%);
+  top: -160px; left: 5%;
 }
 .ntpOrb2 {
-  width: 260px; height: 260px;
-  background: #7fa48b;
-  bottom: -60px; right: 15%;
-  animation-delay: -7s;
+  width: 420px; height: 420px;
+  background: radial-gradient(circle, #7fa48b 0%, transparent 68%);
+  bottom: -140px; right: 10%;
 }
 .ntpOrb3 {
-  width: 200px; height: 200px;
-  background: var(--accent-strong);
-  top: 40%; left: 55%;
-  animation-delay: -13s;
-}
-@keyframes ntpFloat {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  25% { transform: translate(30px, -20px) scale(1.05); }
-  50% { transform: translate(-20px, 15px) scale(0.95); }
-  75% { transform: translate(15px, 25px) scale(1.02); }
+  width: 340px; height: 340px;
+  background: radial-gradient(circle, var(--accent-strong) 0%, transparent 68%);
+  top: 38%; left: 55%;
 }
 
 .ntpContent {
@@ -1276,7 +1266,7 @@ input.switch:active {
 .pullBar { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--border); overflow: hidden; font-size: 12px; }
 .pullFill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent) 30%, transparent); transition: width 0.3s; }
 .pullBar span, .pullBar button { position: relative; }
-.frictionGate { position: absolute; inset: 0; z-index: 48; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--surface-0) 92%, transparent); backdrop-filter: blur(6px); }
+.frictionGate { position: absolute; inset: 0; z-index: 48; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--surface-0) 96%, transparent); }
 .frictionCard { max-width: 420px; padding: 24px 28px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface-1); box-shadow: var(--shadow-pop); text-align: center; }
 .frictionCard h2 { margin: 0 0 8px; }
 .frictionCard p { margin: 6px 0; }

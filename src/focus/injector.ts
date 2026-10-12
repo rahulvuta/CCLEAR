@@ -1,3 +1,5 @@
+import { SELECTION_CSS } from './selection'
+
 export const READING_ASSIST_CLASS = 'cclear-reading-assist'
 export const FOCUS_MODE_CLASS = 'cclear-focus-visual'
 
@@ -43,6 +45,7 @@ export function getInjectReadingAssistScript(): string {
       display: none !important;
     }
 
+    ${SELECTION_CSS}
     [data-cclear-simplified] {
       line-height: 1.7 !important;
       font-size: 1.06em;
@@ -51,6 +54,9 @@ export function getInjectReadingAssistScript(): string {
     [data-cclear-simplified] .cclear-summary-text {
       display: inline;
     }
+    [data-cclear-simplified] .cclear-summary-text.cclear-lines { display: block; }
+    [data-cclear-simplified] .cclear-sent { display: block; margin: 0 0 0.35em; }
+    [data-cclear-simplified] .cclear-sent:last-child { margin-bottom: 0; }
 
     mark.cclear-highlight {
       background: rgba(250, 204, 21, 0.35) !important;
