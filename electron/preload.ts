@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
       goal?: string
     }): Promise<{ text: string; actions: ProposedAction[] }> => ipcRenderer.invoke('ai:assist', payload),
     cancel: (requestId: string): Promise<void> => ipcRenderer.invoke('ai:cancel', requestId),
+    simplifySentences: (sentences: Array<{ id: string; text: string }>): Promise<Array<{ id: string; text: string; changed: boolean }>> => ipcRenderer.invoke('ai:simplify-sentences', sentences),
     askTabs: (p: { requestId: string; question: string; tabs: Array<{ id: string; title: string; url: string; text: string }> }) => ipcRenderer.invoke('ai:ask-tabs', p),
     askPage: (p: { requestId: string; question: string; snapshot: PagePassageSnapshot }) => ipcRenderer.invoke('ai:ask-page', p),
     onChatProgress: (callback: (payload: { think: string; content: string }) => void) => {

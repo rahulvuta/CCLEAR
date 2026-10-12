@@ -20,6 +20,8 @@ import { FindBar } from './components/FindBar'
 import { SessionRecap } from './components/SessionRecap'
 import { TabDiet } from './components/TabDiet'
 import { buildRecap, type Recap } from '../session/recap'
+import { getApplySelectionScript, getCaptureSelectionScript, getRestoreSelectionScript } from '../focus/selection'
+import { shouldSimplifySentence } from '../ai/sentenceSimplify'
 import { CommandPalette } from './components/CommandPalette'
 import type { Command } from '../shared/palette'
 import { useAssistant } from './hooks/useAssistant'
@@ -306,36 +308,56 @@ export function App() {
     if (!blocks.length) return
     if (!stillCurrent()) return
 
-    let list = selectBlocksForSimplify(blocks, SIMPLIFY_MAX_BLOCKS)
+    const list = selectBlocksForSimplify(blocks, SIMPLIFY_MAX_BLOCKS)
     if (!list.length) return
-    // Rewrite what the reader can see first; the rest streams in behind it.
-    try {
-      const m = JSON.parse(String(await w.executeJavaScript('JSON.stringify({ y: window.scrollY, h: window.innerHeight })', true)))
-      list = viewportFirst(list, Number(m.y) || 0, Number(m.h) || 800)
-    } catch {
-      //
+    const byId = new Map(list.map((b) => [b.id, b]))
+    const scrollMetrics = async () => {
+      try {
+        const m = JSON.parse(String(await w.executeJavaScript('JSON.stringify({ y: window.scrollY, h: window.innerHeight })', true)))
+        return { y: Number(m.y) || 0, h: Number(m.h) || 800 }
+      } catch {
+        return { y: 0, h: 800 }
+      }
     }
 
-    const chunks = pageBlocksToSimplifyChunks(list)
-    const origById = new Map(list.map((b) => [b.id, b.text]))
-    const tagById = new Map(list.map((b) => [b.id, b.tagName]))
-
-    setSimplifyBusy(true)
     try {
       const out: ApplySummaryItem[] = []
-      // First batch is small so the first visible paragraphs change quickly.
-      for (let offset = 0; offset < chunks.length; offset += offset === 0 ? 2 : 3) {
+      // Lazy, viewport-first: simplify what is on screen and about two screens ahead, then wait for the reader
+      // to scroll. This keeps the model idle on long pages instead of rewriting text nobody has reached yet.
+      let remaining = [...list]
+      let first = true
+      while (remaining.length) {
         if (!stillCurrent()) return
-        const size = offset === 0 ? 2 : 3
-        const res = await window.cclearBrowser.ai.simplifyChunks(chunks.slice(offset, offset + size))
+        const m = await scrollMetrics()
+        const ordered = viewportFirst(remaining, m.y, m.h)
+        const nearest = ordered[0]
+        const tooFar = typeof nearest.y === 'number' && (nearest.y > m.y + m.h * 2.5 || nearest.y < m.y - m.h * 1.2)
+        if (tooFar) {
+          const idle = document.hidden || !document.hasFocus()
+          await new Promise<void>((r) => setTimeout(r, idle ? 4000 : 1500))
+          continue
+        }
+        // Small first batch so the first visible paragraphs change quickly; gentler batches afterwards.
+        const size = first ? 2 : 3
+        first = false
+        const picked = ordered.slice(0, size)
+        remaining = remaining.filter((b) => !picked.some((p) => p.id === b.id))
+
+        setSimplifyBusy(true)
+        let res: Awaited<ReturnType<typeof window.cclearBrowser.ai.simplifyChunks>>
+        try {
+          res = await window.cclearBrowser.ai.simplifyChunks(pageBlocksToSimplifyChunks(picked))
+        } finally {
+          if (epoch === simplifyEpochRef.current) setSimplifyBusy(false)
+        }
         if (!stillCurrent()) return
         const batch = res.map((r) => ({
           ...r,
-          original: origById.get(r.id),
-          summary: r.summary || (origById.get(r.id) ?? ''),
+          original: byId.get(r.id)?.text,
+          summary: r.summary || (byId.get(r.id)?.text ?? ''),
           highlightPhrases: r.highlightPhrases ?? [],
           termEmphasis: r.termEmphasis ?? [],
-          tagName: tagById.get(r.id)
+          tagName: byId.get(r.id)?.tagName
         }))
         await w.executeJavaScript(buildApplySummariesScript(batch, isSearch), true)
         out.push(...batch)
@@ -347,6 +369,8 @@ export function App() {
           }
           return
         }
+        // A short breather between batches so the GPU is not pinned for the whole page.
+        await new Promise<void>((r) => setTimeout(r, 400))
       }
       if (out.length > 0) simplifyApplyCacheRef.current.set(cacheKey, out)
       await w.executeJavaScript(`document.documentElement.setAttribute('data-cclear-focus-complete', '')`, true)
@@ -383,7 +407,10 @@ export function App() {
     void window.cclearBrowser.prefs
       .get()
       .then((p) => {
-        if (!cancelled) setFocusModeEnabled(p.focusModeEnabled)
+        if (!cancelled) {
+          setFocusModeEnabled(p.focusModeEnabled)
+          setEco(p.eco ?? true)
+        }
       })
       .catch(() => {})
     void window.cclearBrowser.ai
@@ -693,12 +720,15 @@ export function App() {
   const [recap, setRecap] = useState<Recap | null>(null)
   const [dietDismissedUntil, setDietDismissedUntil] = useState(0)
   const [calmNote, setCalmNote] = useState('')
+  const [notice, setNotice] = useState('')
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findActive, setFindActive] = useState(0)
   const [findCount, setFindCount] = useState(0)
   const shortcutExtraRef = useRef<(action: string, args: unknown[]) => void>(() => {})
   const [blockerEnabled, setBlockerEnabled] = useState(true)
+  const [eco, setEco] = useState(true)
   const [blockedCount, setBlockedCount] = useState(0)
   const [friction, setFriction] = useState<{ tabId: string; host: string } | null>(null)
   const frictionPassed = useRef(new Map<string, number>())
@@ -824,6 +854,14 @@ export function App() {
     setActiveId(next[activeIdx].id)
   }, [session.ready, session.restored])
 
+  // Marks the moment the saved session has loaded and its tabs were restored, so automated checks and demos
+  // know it is safe to start interacting (earlier input could be overwritten by the restore).
+  useEffect(() => {
+    if (!session.ready) return
+    const t = setTimeout(() => document.documentElement.setAttribute('data-cclear-ready', '1'), 400)
+    return () => clearTimeout(t)
+  }, [session.ready])
+
   // Persist the open tabs so a restart (or crash) returns to the same place.
   const tabsSnapshot = useMemo(
     () => JSON.stringify(tabs.filter((t) => t.url && t.url !== 'about:blank').map((t) => ({ url: t.url, title: t.title, favicon: t.favicon, active: t.id === activeId }))),
@@ -854,7 +892,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
-    const timer = setInterval(() => void recordProgress(activeIdRef.current), 10000)
+    const timer = setInterval(() => {
+      if (!document.hidden) void recordProgress(activeIdRef.current)
+    }, 15000)
     return () => clearInterval(timer)
   }, [recordProgress])
 
@@ -883,6 +923,7 @@ export function App() {
   // Count of ads/trackers blocked on the active page.
   useEffect(() => {
     const timer = setInterval(async () => {
+      if (document.hidden) return
       const w = webviewRefs.current[activeIdRef.current]
       try {
         const id = w?.getWebContentsId?.()
@@ -890,7 +931,7 @@ export function App() {
       } catch {
         setBlockedCount(0)
       }
-    }, 2000)
+    }, 4000)
     return () => clearInterval(timer)
   }, [])
 
@@ -968,6 +1009,44 @@ export function App() {
     }
   }, [findQuery, findOpen])
 
+  // ── Simplify / restore just the selected text, sentence by sentence ────────
+  function notify(text: string, ms = 7000) {
+    setNotice(text)
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    noticeTimer.current = ms ? setTimeout(() => setNotice(''), ms) : null
+  }
+
+  async function simplifySelection() {
+    const w = webviewRefs.current[activeIdRef.current]
+    if (!w) return
+    try {
+      const raw = await w.executeJavaScript(getCaptureSelectionScript(), true)
+      const cap = raw ? (JSON.parse(String(raw)) as { sentences: Array<{ id: string; text: string }> }) : null
+      if (!cap || !cap.sentences.length) return notify('Select some text on the page first.')
+      const targets = cap.sentences.filter((x) => shouldSimplifySentence(x.text))
+      if (!targets.length) return notify('Those sentences are already short and simple.')
+      notify(`Simplifying ${targets.length} sentence${targets.length === 1 ? '' : 's'}…`, 0)
+      const res = await window.cclearBrowser.ai.simplifySentences(targets)
+      const changed = res.filter((r) => r.changed)
+      if (!changed.length) return notify('I could not make those simpler without risking the meaning, so I left them as they are.')
+      await w.executeJavaScript(getApplySelectionScript(changed), true)
+      notify(`Simplified ${changed.length} sentence${changed.length === 1 ? '' : 's'}. Select them and right-click → “Show original” to undo.`, 9000)
+    } catch (e) {
+      notify(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : 'Could not simplify the selection.')
+    }
+  }
+
+  async function restoreSelection() {
+    const w = webviewRefs.current[activeIdRef.current]
+    if (!w) return
+    try {
+      const n = Number(await w.executeJavaScript(getRestoreSelectionScript(), true))
+      notify(n ? `Restored the original text (${n} ${n === 1 ? 'piece' : 'pieces'}).` : 'Nothing simplified in the selection.')
+    } catch {
+      notify('Could not restore the selection.')
+    }
+  }
+
   shortcutExtraRef.current = (action, args) => {
     const arg = String(args[0] ?? '')
     switch (action) {
@@ -976,6 +1055,8 @@ export function App() {
       case 'open-url-new-tab': return openTabAt(arg)
       case 'reader': return void reading.openReader()
       case 'calm': return calmView()
+      case 'selection-simplify': return void simplifySelection()
+      case 'selection-restore': return void restoreSelection()
       case 'selection-explain':
         setSidebarOpen(true)
         return void assistant.send(`Explain this in simple words: “${arg}”`)
@@ -997,6 +1078,8 @@ export function App() {
     act('calm', 'I feel overwhelmed (calm view)', calmView, 'panic anxious too much stressed simplify')
     act('reader', 'Open reader view', () => void reading.openReader(), 'simplify article summary tldr')
     act('reading', 'Reading tools (fonts, line focus)', () => setReadingOpen(true), 'typography dyslexia ruler dim')
+    act('sel-simplify', 'Simplify selected text', () => void simplifySelection(), 'phrase sentence shorten easier select')
+    act('sel-restore', 'Show original of selected text', () => void restoreSelection(), 'undo unsimplify restore select')
     act('find', 'Find in page', openFind, 'search text')
     act('focus', `${focusModeEnabled ? 'Turn off' : 'Turn on'} Focus mode`, () => void persistFocusMode(!focusModeEnabled), 'simplify')
     act('settings', 'Settings', () => setSettingsOpen(true), 'preferences model ollama blocker')
@@ -1347,6 +1430,12 @@ export function App() {
             onDismiss={() => setDietDismissedUntil(Date.now() + 15 * 60_000)}
           />
         )}
+        {notice && !calmNote && (
+          <div className="resumeToast" role="status" aria-live="polite">
+            <span>{notice}</span>
+            <button type="button" className="nudgeLink" onClick={() => setNotice('')}>Dismiss</button>
+          </div>
+        )}
         {calmNote && (
           <div className="resumeToast" role="status" aria-live="polite">
             <span>{calmNote}</span>
@@ -1387,6 +1476,11 @@ export function App() {
             onAssistLevel={(level) => session.dispatch({ type: 'assistLevel', level })}
             frictionHosts={session.state.frictionHosts}
             onFriction={(host, on) => session.dispatch({ type: 'friction', host, on })}
+            eco={eco}
+            onEco={(on) => {
+              setEco(on)
+              void window.cclearBrowser.prefs.set({ eco: on })
+            }}
             blockerEnabled={blockerEnabled}
             onBlockerEnabled={(on) => {
               setBlockerEnabled(on)

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, Menu, session, shell } from 'electron'
 import { trackNavigations } from './blocker'
+import { getSelectionProbeScript } from '../src/focus/selection'
 import { isAllowedNavigationUrl, parseWebUrl, PROMPTED_PERMISSIONS, SILENT_PERMISSIONS } from '../src/shared/urlPolicy'
 
 export const WEBVIEW_PARTITION = 'persist:adhd-browser'
@@ -70,12 +71,18 @@ export function hardenWebContents(win: BrowserWindow) {
   win.webContents.on('did-attach-webview', (_event, wc) => {
     trackNavigations(wc)
     wc.on('context-menu', (_e, p) => {
+      // Ask the page what is selected (and whether it is already simplified) before building the menu.
+      const probe = p.selectionText.trim() ? wc.executeJavaScript(getSelectionProbeScript(), true).then((r) => JSON.parse(String(r)) as { has: boolean; simplified: boolean }).catch(() => ({ has: true, simplified: false })) : Promise.resolve({ has: false, simplified: false })
+      void probe.then((sel0) => {
       const send = (action: string, payload?: string) => win.webContents.send('shortcut', action, payload)
       const sel = p.selectionText.trim().slice(0, 600)
       const template: Electron.MenuItemConstructorOptions[] = []
       if (sel) {
         const short = sel.length > 28 ? `${sel.slice(0, 28)}…` : sel
         template.push(
+          { label: 'Simplify selected text', click: () => send('selection-simplify') },
+          ...(sel0.simplified ? [{ label: 'Show original of selected text', click: () => send('selection-restore') }] : []),
+          { type: 'separator' as const },
           { label: 'Explain this simply', click: () => send('selection-explain', sel) },
           { label: 'Define', click: () => send('selection-define', sel) },
           { label: 'Park as a thought', click: () => send('selection-park', sel) },
@@ -106,6 +113,7 @@ export function hardenWebContents(win: BrowserWindow) {
         )
       }
       Menu.buildFromTemplate(template).popup({ window: win })
+      })
     })
     wc.on('will-navigate', (e, url) => {
       if (!isAllowedNavigationUrl(url)) e.preventDefault()
