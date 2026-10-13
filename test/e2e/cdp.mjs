@@ -18,11 +18,36 @@ export function fixtureServer(port, pages) {
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)))
 }
 
+function electronBinary(root) {
+  const direct = path.join(root, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
+  return fs.existsSync(direct) ? direct : path.join(root, 'node_modules/.bin/electron')
+}
+
+async function portInUse(port) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(800) })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Kill the whole process group so no helper or wrapper can outlive the test and hold the port. */
+export async function stopApp(child, port) {
+  try { process.kill(-child.pid, 'SIGTERM') } catch { /* already gone */ }
+  for (let i = 0; i < 20 && (await portInUse(port)); i++) await sleep(250)
+  if (await portInUse(port)) {
+    try { process.kill(-child.pid, 'SIGKILL') } catch { /* */ }
+    for (let i = 0; i < 20 && (await portInUse(port)); i++) await sleep(250)
+  }
+}
+
 export async function launchApp({ root, userData, port = 9333, env = {} }) {
-  const electron = path.join(root, 'node_modules/.bin/electron')
-  const child = spawn(electron, [root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
-    env: { ...process.env, ...env },
-    stdio: ['ignore', 'pipe', 'pipe']
+  if (await portInUse(port)) throw new Error(`Port ${port} is already in use: a previous app is still running. Close it and retry.`)
+  const child = spawn(electronBinary(root), [root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], {
+    env: { ...process.env, CCLEAR_E2E: '1', ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true
   })
   let log = ''
   child.stdout.on('data', (d) => (log += d))
@@ -37,7 +62,7 @@ export async function launchApp({ root, userData, port = 9333, env = {} }) {
     }
     await sleep(250)
   }
-  child.kill()
+  await stopApp(child, port)
   throw new Error('Electron did not expose a renderer target:\n' + log)
 }
 
