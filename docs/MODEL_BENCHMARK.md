@@ -35,16 +35,37 @@ Focus mode rewrites paragraphs. The original pipeline asks a second model pass t
 | **qwen3:8b, original strict prompt** | **6 / 6** | **9 / 9** |
 | qwen3:8b, lenient prompt | 6 / 6 | 8 / 9 (missed the dropped mechanism) |
 
-So the 4B model is an unusable reviewer (it rejects every faithful rewrite, so nothing ever gets simplified), and the fix is a **stronger reviewer, not a weaker check**. End-to-end on 10 real paragraphs (4B writes):
+So the 4B model is an unusable reviewer (it rejects every faithful rewrite, so nothing ever gets simplified), and with the **old, gentle length budget** a stronger reviewer fixed that:
 
-| Configuration | Time | Paragraphs simplified | Key facts kept | Number/date errors |
+| Config (old budget: keep 50–75% of words) | Time | Simplified | Key facts kept | Number errors |
 |---|---|---|---|---|
 | 4B reviews every block (lenient) | 67 s | 3 / 10 | 100% | 0 |
 | 8B reviews every block (strict) | 106 s | 3 / 10 | 100% | 0 |
-| **8B reviews only risky blocks** (numbers, cause-and-effect, lists, heavy compression, repairs) | 75 s | 6 / 10 | 95% | 0 |
+| 8B reviews only risky blocks | 75 s | 6 / 10 | 95% | 0 |
 | no model review (rules only) | 38 s | 6 / 10 | 95% | 0 |
 
-Shipped behaviour: if `qwen3:8b` (or 14b) is installed **and** the Mac has ≥ 15 GB, risky blocks get the 8B strict review; otherwise only the rule-based checks run, and Settings says so ("checked by rules only"). Either way every simplified paragraph is one click from its original. Honest caveats: about 4 in 10 paragraphs fail the rule-based checks and stay unchanged in every configuration; "key facts kept" is a hand-written list of 2–5 facts per paragraph; the review-always rows being slower and *less productive* than selective is partly the reviewer being stricter than the rules alone. Time to first visible rewrite of the first two on-screen paragraphs: ~8 s with the 8B reviewer, ~3 s rules-only (page load and cold model loading add more in practice; one end-to-end run measured 37 s from toggle to first paragraph on a cold start).
+### 3b. After asking for much shorter output (2026-10-19)
+User feedback was that big paragraphs stayed big (output was ~65% of the source). The budget became tiered (target ≈62% for short blocks, ≈45% medium, ≈33% long), the first draft must come in near target, retries relax toward a ceiling, long blocks must keep at least half of their numbers (invented numbers are always rejected), and each sentence is shown on its own line.
+
+| Config (new budget) | Time | Simplified | Key facts kept | Length vs original |
+|---|---|---|---|---|
+| **no model review (rules only) — the default** | **34 s** | **7 / 10** | 95% | 59% |
+| 4B reviews every block (lenient) | 78 s | 3 / 10 | 100% | 61% |
+| 8B reviews every block (strict) | 301 s | 0 / 10 | — | — |
+| 8B reviews risky blocks (strict) | 302 s | 1 / 10 | 100% | 60% |
+| 8B reviews risky blocks (lenient) | 302 s | 1 / 10 | 100% | 60% |
+
+On genuinely **long** paragraphs (11 paragraphs of 54–159 words from the engine article, rules only, 4B): 9 simplified, at **27–57% of their original length** (e.g. 136 → 37 words, 159 → 60, 146 → 40), 2 left unchanged.
+
+What this means, honestly:
+- Cutting hard and strictly fact-checking every omission pull in opposite directions: a model reviewer sees "this detail is missing" on almost every aggressive rewrite, so strict and even lenient review leave almost nothing simplified. The ~300 s rows are also review calls hitting their time limit. Second-model review is therefore **off by default** (eco mode) and labelled in Settings as stricter and slower; it was not made to work well with aggressive cutting.
+- The default path relies on rule checks (no invented numbers, ≥ half of a long block's numbers, complete grammar, length window), 95% hand-listed key-fact retention on the demo article, and the always-available "show original" instead of model review.
+- A first attempt at the tighter budget dropped acceptance to 1 / 10 because the model undershoots hard length targets and the old "keep every number" rule conflicted with cutting dense paragraphs; separating the prompt target from the acceptance ceiling and relaxing the number rule for long blocks fixed it.
+- Time to first rewritten paragraph in the real app dropped from ~35 s to ~12 s (eco mode no longer loads the second model).
+- Small sample (10 and 11 paragraphs, one machine, one run); a stray 90 s timeout in the review rows may also reflect other programs sharing the GPU during the run.
+
+### 3c. Selection ("phrase") simplification
+Sentence-level rewrites are validated individually (not longer than the original, at least a quarter of its length, no number added or lost, no invented URLs/dates), rejected ones are retried once and otherwise left untouched. In the end-to-end test, two paragraphs (97 words) became 79–82 words with every changed sentence keeping its original for exact restore.
 
 ## 4. Not covered
 8 GB Macs (no 8 GB hardware available; `qwen3:1.7b` is suggested in Settings and is **untested**), real-world page diversity beyond the demo article, multilingual pages, long-session memory use, and any model not installed on the test machine.
