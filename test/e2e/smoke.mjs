@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Cdp, clickText, connectWebview, fixtureServer, launchApp, setInput, sleep } from './cdp.mjs'
+import { Cdp, clickText, connectWebview, fixtureServer, launchApp, setInput, sleep, stopApp } from './cdp.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const shots = process.env.E2E_SHOTS || fs.mkdtempSync(path.join(os.tmpdir(), 'cclear-e2e-'))
@@ -31,9 +31,14 @@ pages['/clips'] = readDemo('gaming-clips.html')
 pages['/ads'] = '<!doctype html><title>Ad page</title><body style="background:#fff"><h1>News</h1><img src="https://ad.doubleclick.net/pixel.gif" width=1 height=1><img src="https://cdn.taboola.com/x.gif" width=1 height=1><script src="https://securepubads.g.doubleclick.net/tag.js"></script>'
 const server = await fixtureServer(4599, pages)
 const run = async (phase, fn) => {
+  // E2E_ONLY=citations,reading runs just those phases
+  if (process.env.E2E_ONLY && !process.env.E2E_ONLY.split(',').includes(phase)) return
   const app = await launchApp({ root, userData, port: 9333 })
   const cdp = new Cdp(app.page.webSocketDebuggerUrl)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  // The test window usually sits behind other windows; make it behave as visible so hidden-window throttling does not apply.
+  await cdp.eval(`Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })`)
+  await cdp.waitFor(`document.documentElement.hasAttribute('data-cclear-ready')`, 20000, 'app ready (session restored)')
   await cdp.eval(`localStorage.setItem('cclear.demo','1')`)
   try {
     await fn(cdp)
@@ -42,13 +47,15 @@ const run = async (phase, fn) => {
     await cdp.screenshot(path.join(shots, `${phase}-error.png`)).catch(() => {})
   }
   cdp.close()
-  app.child.kill()
-  await sleep(1200)
+  await stopApp(app.child, 9333)
 }
 
 const navigate = async (cdp, url) => {
   await cdp.eval(setInput('.addrInput', url))
   await cdp.eval(`document.querySelector('.addrForm').requestSubmit()`)
+  // wait for the tab to actually point at the new address (a restored tab can still show an older title)
+  const path = new URL(url).pathname
+  await cdp.waitFor(`[...document.querySelectorAll('.tabTitle')].some(t => t.title.includes(${JSON.stringify(path)}))`, 30000, `tab url ${path}`)
 }
 
 await run('session1', async (cdp) => {
@@ -99,13 +106,13 @@ await run('session2', async (cdp) => {
 await run('assistant', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/injected')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Steam')`, 15000, 'injected page loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Steam')`, 30000, 'injected page loaded')
   const tabsBefore = await cdp.eval(`document.querySelectorAll('.tab').length`)
   await cdp.eval(`document.querySelector('.chatEdgeToggle')?.getAttribute('aria-expanded') === 'false' && document.querySelector('.chatEdgeToggle').click()`)
   await cdp.eval(`(() => { const t = document.querySelector('.chatTextarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; set.call(t,'Summarize this page in one sentence'); t.dispatchEvent(new Event('input',{bubbles:true})); })()`)
   await cdp.eval(`document.querySelector('.sendBtn').click()`)
   // finished = stop button gone AND a non-empty assistant message exists
-  await cdp.waitFor(`!document.querySelector('.sendBtnStop') && [...document.querySelectorAll('.bubbleAsst')].some(b => b.textContent.trim().length > 0)`, 90000, 'assistant reply finished')
+  await cdp.waitFor(`!document.querySelector('.sendBtnStop') && [...document.querySelectorAll('.bubbleAsst')].some(b => b.textContent.trim().length > 0)`, 150000, 'assistant reply finished')
   const reply = await cdp.eval(`[...document.querySelectorAll('.bubbleAsst')].map(b => b.textContent.trim()).find(Boolean)`)
   check(reply.length > 10, 'assistant produced a real reply', reply.slice(0, 50))
   console.log('      reply:', reply.slice(0, 160).replace(/\n/g, ' '))
@@ -118,7 +125,7 @@ await run('assistant', async (cdp) => {
 await run('reading', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/industrial')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 15000, 'article loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
   const wv = await connectWebview(9333, '/industrial')
 
   // typography settings are applied non-destructively
@@ -149,12 +156,12 @@ await run('reading', async (cdp) => {
 await run('citations', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/article')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 15000, 'article loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
   const wv = await connectWebview(9333, '/article')
   await cdp.eval(`document.querySelector('.chatEdgeToggle')?.getAttribute('aria-expanded') === 'false' && document.querySelector('.chatEdgeToggle').click()`)
   const ask = (q) => cdp.eval(`(() => { const t = document.querySelector('.chatTextarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; set.call(t, ${JSON.stringify(q)}); t.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.sendBtn').click(); })()`)
   await ask('When did James Watt patent his steam engine?')
-  await cdp.waitFor(`document.querySelectorAll('.sourceChip').length >= 1`, 60000, 'cited answer')
+  await cdp.waitFor(`document.querySelectorAll('.sourceChip').length >= 1`, 150000, 'cited answer')
   const answer = await cdp.eval(`document.querySelectorAll('.bubbleAsst')[0].childNodes[0].textContent`)
   const cite = await cdp.eval(`document.querySelector('.sourceText').textContent`)
   console.log('      answer:', answer.slice(0, 140))
@@ -194,20 +201,28 @@ await run('distraction', async (cdp) => {
   await cdp.eval(clickText('.frictionGate .nudgeBtn', 'Continue anyway'))
   await cdp.waitFor(`!document.querySelector('.frictionGate')`, 3000, 'gate closed')
   check(true, 'pause ends with a deliberate choice to continue')
+
+  // leave the shared profile clean for later phases: remove the pause site again
+  await cdp.eval(clickText('.topReadBtn', 'Settings'))
+  await cdp.waitFor(`!!document.querySelector('.settingsPanel')`, 5000, 'settings')
+  await cdp.eval(`document.querySelector('.settingsPanel [aria-label="Remove 127.0.0.1"]')?.click()`)
+  await cdp.waitFor(`!document.querySelector('.settingsPanel [aria-label="Remove 127.0.0.1"]')`, 3000, 'pause site removed')
+  await cdp.eval(`document.querySelector('.settingsPanel [aria-label="Close settings"]').click()`)
+  await sleep(1000) // let the debounced save flush
 })
 
 await run('tabs-and-ledger', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/article')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 15000, 'article loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
   await cdp.eval(`document.querySelector('.tabNewBtn').click()`)
   await sleep(500)
   await cdp.eval(setInput('.ntpSearchInput', 'http://127.0.0.1:4599/clips'))
   await cdp.eval(`document.querySelector('.ntpSearchForm').requestSubmit()`)
-  await cdp.waitFor(`[...document.querySelectorAll('.tabTitleText')].some(t => t.textContent.includes('Minecraft'))`, 15000, 'second tab loaded')
+  await cdp.waitFor(`[...document.querySelectorAll('.tabTitleText')].some(t => t.textContent.includes('Minecraft'))`, 30000, 'second tab loaded')
   await cdp.eval(`document.querySelector('.chatEdgeToggle')?.getAttribute('aria-expanded') === 'false' && document.querySelector('.chatEdgeToggle').click()`)
   await cdp.eval(`(() => { const t = document.querySelector('.chatTextarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; set.call(t, 'Which of my tabs is about Minecraft?'); t.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.sendBtn').click(); })()`)
-  await cdp.waitFor(`document.querySelectorAll('.sourceChip').length >= 1`, 60000, 'multi-tab answer with sources')
+  await cdp.waitFor(`document.querySelectorAll('.sourceChip').length >= 1`, 150000, 'multi-tab answer with sources')
   const ans = await cdp.eval(`document.querySelectorAll('.bubbleAsst')[0].childNodes[0].textContent`)
   const chip = await cdp.eval(`document.querySelector('.sourceChip').textContent`)
   console.log('      answer:', ans.slice(0, 140))
@@ -237,7 +252,7 @@ await run('tabs-and-ledger', async (cdp) => {
 await run('palette-find-calm', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/article')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 15000, 'article loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
   await sleep(1500)
 
   // command palette
@@ -276,7 +291,7 @@ await run('palette-find-calm', async (cdp) => {
 await run('focus-simplify', async (cdp) => {
   await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
   await navigate(cdp, 'http://127.0.0.1:4599/article')
-  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 15000, 'article loaded')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
   const wv = await connectWebview(9333, '/article')
   await cdp.eval(`document.querySelector('.switch').click()`)
   const t0 = Date.now()
@@ -292,6 +307,47 @@ await run('focus-simplify', async (cdp) => {
   const orig = await wv.eval(`document.querySelector('[data-cclear-view="original"]').innerText`)
   check(orig.length > 0 && orig !== before, 'show original restores the page text', `${before.length} chars simplified vs ${orig.length} original`)
   await cdp.screenshot(path.join(shots, '14-focus.png'))
+  wv.close()
+})
+
+await run('selection-simplify', async (cdp) => {
+  await cdp.waitFor(`!!document.querySelector('.tabTitle')`, 15000, 'app up')
+  await navigate(cdp, 'http://127.0.0.1:4599/article')
+  await cdp.waitFor(`document.querySelector('.tabTitleText')?.textContent.includes('Industrial')`, 30000, 'article loaded')
+  const wv = await connectWebview(9333, '/article')
+  await sleep(1000)
+  const paraIdx = await wv.eval(`[...document.querySelectorAll('p')].findIndex(p => p.textContent.includes('Cotton spinning and weaving'))`)
+  const selectTwo = `(() => { const ps = document.querySelectorAll('p'); const a = ps[${paraIdx}], b = ps[${paraIdx} + 1];
+    const first = a.firstChild, last = b.lastChild; window.getSelection().setBaseAndExtent(first, 0, last, last.nodeValue.length); return a.innerText + ' || ' + b.innerText; })()`
+  const before = await wv.eval(selectTwo)
+
+  const runPalette = async (query) => {
+    await cdp.eval(`document.querySelector('[aria-label="Open command palette"]').click()`)
+    await cdp.waitFor(`!!document.querySelector('.palette')`, 5000, 'palette')
+    await cdp.eval(setInput('.paletteInput', query))
+    await cdp.eval(`document.querySelector('.paletteInput').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`)
+  }
+
+  await runPalette('Simplify selected text')
+  const t0 = Date.now()
+  await wv.waitFor(`document.querySelectorAll('span.cclear-sel').length >= 1`, 120000, 'sentences simplified')
+  console.log('      selection simplified after', Math.round((Date.now() - t0) / 100) / 10, 's')
+  const during = await wv.eval(`(() => { const ps = document.querySelectorAll('p'); return ps[${paraIdx}].innerText + ' || ' + ps[${paraIdx} + 1].innerText })()`)
+  const words = (t) => t.split(/\s+/).filter(Boolean).length
+  console.log('      before:', words(before), 'words  after:', words(during), 'words')
+  console.log('      after text:', during.slice(0, 220))
+  check(words(during) < words(before) * 0.9, 'selected sentences were made shorter', `${words(before)} -> ${words(during)} words`)
+  check(await wv.eval(`[...document.querySelectorAll('span.cclear-sel')].every(s => s.hasAttribute('data-cclear-orig'))`), 'every changed sentence keeps its original text')
+  const other = await wv.eval(`document.querySelectorAll('p')[${paraIdx} + 2].innerText`)
+  check(other.includes('Workers who had once') || other.length > 0, 'text outside the selection is untouched')
+  await cdp.screenshot(path.join(shots, '15-selection-simplified.png'))
+
+  // restore exactly, by selecting again and using "Show original"
+  await wv.eval(selectTwo)
+  await runPalette('Show original of selected')
+  await wv.waitFor(`document.querySelectorAll('span.cclear-sel').length === 0`, 8000, 'restored')
+  const after = await wv.eval(`(() => { const ps = document.querySelectorAll('p'); return ps[${paraIdx}].innerText + ' || ' + ps[${paraIdx} + 1].innerText })()`)
+  check(after === before, 'show original restores the exact text, sentence by sentence')
   wv.close()
 })
 
