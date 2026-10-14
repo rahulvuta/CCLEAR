@@ -18,13 +18,18 @@ CCLEAR is a productivity and reading aid. It does not diagnose, treat, or claim 
 - **Reader view** with a quick summary (numbers are checked against the article; if the AI is unavailable it falls back to the article's opening sentences) and **Listen** (read-aloud). Your original page is never modified; `Esc` returns to it.
 - **Reading tools:** font, size, line and letter spacing, narrow lines, sepia/cream/night backgrounds, a **line-focus ruler**, and **dim paragraphs you are not reading**.
 - **Ask this page.** Questions about the open page are answered from the page itself, with numbered citations; click one to jump to the sentence. If the page does not contain the answer, it says so.
-- **Focus mode** (in-place simplification, on-screen paragraphs first) with click-any-paragraph **show original**. Rewrites are gated by rule checks (numbers, dates, grammar) and, when `qwen3:8b` is installed on a 16 GB Mac, fact-checked by it. About 4 in 10 paragraphs are left unchanged because they fail the checks; see `docs/MODEL_BENCHMARK.md`.
+- **Focus mode** (in-place simplification): long paragraphs are cut hard (a 150-word block becomes roughly 40–60 words) and shown as short lines, one sentence each. It works on what you are about to read, not the whole page at once, and every paragraph is one click from its original (**show original**). Rewrites are gated by rule checks (numbers are never invented; long blocks must keep at least half of theirs). An optional second-model review (eco mode off, `qwen3:8b` installed) exists but is stricter and slower and leaves most paragraphs unchanged, so it is off by default. Some paragraphs are left unchanged when no safe rewrite passes; see `docs/MODEL_BENCHMARK.md`.
+- **Simplify just what you select.** Drag to select text on any page, right-click → **Simplify selected text**. It rewrites the selection one sentence at a time (short sentences are left alone; a rewrite that changes a number or is not shorter is rejected). Select it again and right-click → **Show original of selected text** to put the exact original sentences back. Also in the ⌘K palette.
 
 **Safer assistant**
 - The assistant can only *propose* actions. A deterministic gate decides what runs: harmless things (highlight, scroll, go back) run automatically; opening a site you did not name, clicking, or typing needs your approval; typing into password/card/SSN fields is refused. Text from web pages is treated as data, never as instructions.
 
 **Less noise**
 - Built-in blocker for third-party ad and tracker requests (per-site off switch, visible counter), plus find-in-page, a right-click menu with *Explain / Define / Park*, and a `⌘K` command palette.
+
+## Light on your computer
+
+**Settings → Performance → Lighter on my computer** is on by default: the AI model unloads after 3 idle minutes instead of 30, only one AI task runs at a time (what you are waiting on goes first), simplification only works near what you are reading, and the second, larger reviewer model is skipped. The new-tab page uses static gradients instead of animated blurred layers, and background timers pause when the window is hidden.
 
 ## Run it
 
@@ -66,7 +71,7 @@ Electron + React + TypeScript. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 
 
 - Needs Ollama; the experience on 8 GB Macs is **untested** (a smaller model is suggested but not benchmarked).
 - Relevance judging is a heuristic plus a small local model; it will sometimes be wrong, which is why every nudge is dismissible and "This is relevant" teaches it.
-- In-place simplification is the least reliable feature: it changes only about 6 in 10 paragraphs on the demo article, and on a 4B-only setup is checked by rules, not by a model. Reader view is the more reliable option.
+- In-place simplification is the least reliable feature: on long test paragraphs it simplified 9 of 11 and cut them to about 40% of their length, but it leaves the rest unchanged, and on the default (eco) setup it is checked by rules, not by a model. Reader view is the more reliable option.
 - Read-aloud (Listen) uses the system speech engine and was not verified by automated tests.
 - Multi-window, bookmarks, downloads UI and extensions are not implemented.
 - Built-in blocker is a short conservative host list, not a full filter engine.
