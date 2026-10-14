@@ -53,9 +53,10 @@ const CONFIGS: Array<[string, ReviewMode, Reviewer | undefined]> = [
   ['4b writes, 4b reviews (lenient)', 'always', { strict: false }],
   ['4b writes, 8b reviews (strict)', 'always', { model: 'qwen3:8b', strict: true }],
   ['4b writes, 8b reviews risky blocks only', 'selective', { model: 'qwen3:8b', strict: true }],
+  ['4b writes, 8b reviews risky blocks (lenient)', 'selective', { model: 'qwen3:8b', strict: false }],
   ['4b writes, no review', 'never', undefined]
 ]
-for (const [label, mode, reviewer] of CONFIGS) {
+for (const [label, mode, reviewer] of CONFIGS.filter(([l]) => !process.env.EVAL_ONLY || l.includes(process.env.EVAL_ONLY))) {
   console.error('config', label)
   results.push(await run(label, mode, reviewer))
 }
