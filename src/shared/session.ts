@@ -37,7 +37,7 @@ export type ReadingProgress = {
   at: number
 }
 
-export type SavedTab = { url: string; title: string; favicon?: string; active?: boolean }
+export type SavedTab = { url: string; title: string; favicon?: string; active?: boolean; group?: string }
 
 export type PastSession = {
   id: string

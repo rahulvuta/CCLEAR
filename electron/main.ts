@@ -45,6 +45,11 @@ function buildAppMenu() {
       label: 'File',
       submenu: [
         {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => { void createWindow(true) }
+        },
+        {
           label: 'New Tab',
           accelerator: 'CmdOrCtrl+T',
           click: () => sendToRenderer('shortcut', 'new-tab')
@@ -56,7 +61,7 @@ function buildAppMenu() {
         },
         {
           label: 'Park This Tab',
-          accelerator: 'CmdOrCtrl+Shift+P',
+          accelerator: 'CmdOrCtrl+Alt+P',
           click: () => sendToRenderer('shortcut', 'park-tab')
         },
         {
@@ -66,8 +71,14 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Print Page',
+          accelerator: 'CmdOrCtrl+P',
+          click: () => sendToRenderer('shortcut', 'print')
+        },
+        { type: 'separator' },
+        {
           label: 'Command Palette',
-          accelerator: 'CmdOrCtrl+K',
+          accelerator: 'CmdOrCtrl+Shift+P',
           click: () => sendToRenderer('shortcut', 'palette')
         },
         {
@@ -75,7 +86,32 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+L',
           click: () => sendToRenderer('shortcut', 'focus-address')
         },
+        {
+          label: 'Search from Address Bar',
+          accelerator: 'CmdOrCtrl+K',
+          click: () => sendToRenderer('shortcut', 'focus-address')
+        },
+        ...(isMac ? [{
+          label: 'Search from Address Bar (alternate)',
+          accelerator: 'Command+Alt+F',
+          click: () => sendToRenderer('shortcut', 'focus-address')
+        }] : []),
+        ...(!isMac ? [{
+          label: 'Open Location (alternate)',
+          accelerator: 'Alt+D',
+          click: () => sendToRenderer('shortcut', 'focus-address')
+        }] : []),
+        {
+          label: 'Search Tabs',
+          accelerator: 'CmdOrCtrl+Shift+A',
+          click: () => sendToRenderer('shortcut', 'tab-search')
+        },
         { type: 'separator' },
+        {
+          label: 'Close Window',
+          accelerator: 'CmdOrCtrl+Shift+W',
+          role: 'close'
+        },
         ...(isMac ? [] : [{ role: 'quit' as const }])
       ]
     },
@@ -96,7 +132,22 @@ function buildAppMenu() {
           label: 'Find',
           accelerator: 'CmdOrCtrl+F',
           click: () => sendToRenderer('shortcut', 'find')
-        }
+        },
+        {
+          label: 'Find Next',
+          accelerator: 'CmdOrCtrl+G',
+          click: () => sendToRenderer('shortcut', 'find-next')
+        },
+        {
+          label: 'Find Previous',
+          accelerator: 'CmdOrCtrl+Shift+G',
+          click: () => sendToRenderer('shortcut', 'find-prev')
+        },
+        ...(!isMac ? [{
+          label: 'Find (F3)',
+          accelerator: 'F3',
+          click: () => sendToRenderer('shortcut', 'find')
+        }] : [])
       ] as Electron.MenuItemConstructorOptions[]
     },
 
@@ -109,6 +160,11 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+R',
           click: () => sendToRenderer('shortcut', 'reload')
         },
+        ...(!isMac ? [{
+          label: 'Reload Page (F5)',
+          accelerator: 'F5',
+          click: () => sendToRenderer('shortcut', 'reload')
+        }] : []),
         {
           label: 'Hard Reload',
           accelerator: 'CmdOrCtrl+Shift+R',
@@ -130,6 +186,11 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+0',
           click: () => sendToRenderer('shortcut', 'zoom-reset')
         },
+        {
+          label: 'Developer Tools',
+          accelerator: isMac ? 'Command+Alt+I' : 'Control+Shift+J',
+          click: () => sendToRenderer('shortcut', 'devtools')
+        },
         { type: 'separator' },
         {
           label: 'Toggle Focus Mode',
@@ -147,7 +208,7 @@ function buildAppMenu() {
           click: () => sendToRenderer('shortcut', 'toggle-sidebar')
         },
         { type: 'separator' },
-        { role: 'togglefullscreen' }
+        { role: 'togglefullscreen', accelerator: isMac ? 'Control+Command+F' : 'F11' }
       ]
     },
 
@@ -165,16 +226,53 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+]',
           click: () => sendToRenderer('shortcut', 'go-forward')
         },
+        {
+          label: 'Back (arrow)',
+          accelerator: isMac ? 'Command+Left' : 'Alt+Left',
+          click: () => sendToRenderer('shortcut', 'go-back')
+        },
+        {
+          label: 'Forward (arrow)',
+          accelerator: isMac ? 'Command+Right' : 'Alt+Right',
+          click: () => sendToRenderer('shortcut', 'go-forward')
+        },
+        {
+          label: 'Home',
+          accelerator: isMac ? 'Command+Shift+H' : 'Alt+Home',
+          click: () => sendToRenderer('shortcut', 'home')
+        },
         { type: 'separator' },
         {
           label: 'Next Tab',
-          accelerator: 'CmdOrCtrl+Shift+]',
+          accelerator: 'Control+Tab',
           click: () => sendToRenderer('shortcut', 'next-tab')
         },
         {
           label: 'Previous Tab',
-          accelerator: 'CmdOrCtrl+Shift+[',
+          accelerator: 'Control+Shift+Tab',
           click: () => sendToRenderer('shortcut', 'prev-tab')
+        },
+        ...(isMac ? [
+          {
+            label: 'Next Tab (arrow)',
+            accelerator: 'Command+Alt+Right',
+            click: () => sendToRenderer('shortcut', 'next-tab')
+          },
+          {
+            label: 'Previous Tab (arrow)',
+            accelerator: 'Command+Alt+Left',
+            click: () => sendToRenderer('shortcut', 'prev-tab')
+          }
+        ] : []),
+        {
+          label: 'Move Tab Left',
+          accelerator: 'Control+Shift+PageUp',
+          click: () => sendToRenderer('shortcut', 'move-tab-left')
+        },
+        {
+          label: 'Move Tab Right',
+          accelerator: 'Control+Shift+PageDown',
+          click: () => sendToRenderer('shortcut', 'move-tab-right')
         },
         { type: 'separator' },
         {
@@ -259,13 +357,16 @@ function resolveRendererUrl() {
   return path.join(__dirname, '../renderer/index.html')
 }
 
-async function createWindow() {
+async function createWindow(fresh = false) {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 620,
     title: 'CCLEAR',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    backgroundColor: '#f6f5f1',
+    icon: path.join(app.getAppPath(), 'assets/icon.png'),
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
@@ -285,15 +386,20 @@ async function createWindow() {
 
   const urlOrFile = resolveRendererUrl()
   if (urlOrFile.startsWith('http')) {
-    await win.loadURL(urlOrFile)
+    const url = new URL(urlOrFile)
+    if (fresh) url.searchParams.set('newWindow', '1')
+    await win.loadURL(url.toString())
   } else {
-    await win.loadFile(urlOrFile)
+    await win.loadFile(urlOrFile, fresh ? { query: { newWindow: '1' } } : undefined)
   }
 }
 
 disableRemoteContent()
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    try { app.dock?.setIcon(path.join(app.getAppPath(), 'assets/icon.png')) } catch { /* packaged icon remains available */ }
+  }
   installBlocker()
   void createWindow()
   app.on('activate', () => {
