@@ -29,10 +29,10 @@ export function ChatSidebar(props: Props) {
   return (
     <div className="chat">
       <div className="chatHead">
-        <div className="chatTitle">CCLEAR</div>
-        <div className="chatSubtitle">Focus assistant</div>
+        <div className="chatTitle">Assistant</div>
+        <div className="chatSubtitle">Ask about this page or your open tabs</div>
 
-        <div style={{ marginTop: 10 }}>
+        <div className="chatQuickActions">
           <div className="quickRow">
             <button type="button" className="pill" onClick={() => onSend('Summarize the active tab for me in 5 bullets.')}>
               Summarize tab
@@ -44,7 +44,7 @@ export function ChatSidebar(props: Props) {
               type="button"
               className="pill"
               onClick={() =>
-                onSend('Based on my open tabs, where should I click next to finish signup or find pricing?')
+                onSend('Based on my open tabs and current goal, what should I read or do next?')
               }
             >
               Where next
@@ -140,7 +140,7 @@ export function ChatSidebar(props: Props) {
               onSend()
             }
           }}
-          placeholder="Message Focus..."
+          placeholder="Ask anything about this page…"
         />
         {sending ? (
           <button type="button" className="sendBtn sendBtnStop" onClick={onCancel} title="Stop" aria-label="Stop">
