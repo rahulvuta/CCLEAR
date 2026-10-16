@@ -18,11 +18,18 @@ type Props = {
   onSiteAllowed: (on: boolean) => void
   onClose: () => void
   onModelChanged: () => void
+  onOpenOllama: () => void
 }
 
 const LEVELS: AssistLevel[] = ['off', 'quiet', 'balanced', 'coach']
+type ThemeChoice = 'light' | 'dark' | 'system'
+const THEMES: ThemeChoice[] = ['light', 'dark', 'system']
 
 export function SettingsPanel(p: Props) {
+  const [theme, setTheme] = useState<ThemeChoice>(() => {
+    const saved = document.documentElement.dataset.theme
+    return saved === 'dark' || saved === 'system' ? saved : 'light'
+  })
   const [status, setStatus] = useState<Status | null>(null)
   const [pulling, setPulling] = useState<{ name: string; pct: number; text: string } | null>(null)
   const [pullError, setPullError] = useState('')
@@ -66,6 +73,12 @@ export function SettingsPanel(p: Props) {
     refresh()
   }
 
+  const chooseTheme = (choice: ThemeChoice) => {
+    setTheme(choice)
+    document.documentElement.dataset.theme = choice
+    try { localStorage.setItem('cclear.theme', choice) } catch { /* preference stays until restart */ }
+  }
+
   return (
     <div className="readPanel settingsPanel" role="dialog" aria-label="Settings">
       <div className="readHead">
@@ -74,11 +87,23 @@ export function SettingsPanel(p: Props) {
       </div>
 
       <section className="setSection">
+        <h3>Appearance</h3>
+        <div className="segRow" role="radiogroup" aria-label="Color theme">
+          {THEMES.map((choice) => (
+            <button key={choice} type="button" role="radio" aria-checked={theme === choice} className={`segBtn${theme === choice ? ' segOn' : ''}`} onClick={() => chooseTheme(choice)}>
+              {choice[0].toUpperCase() + choice.slice(1)}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="setSection">
         <h3>Local AI</h3>
         {!status && <p className="parkHint">Checking…</p>}
         {status && !status.ollama && (
           <div className="setWarn" role="alert">
-            Ollama is not running. Install it from ollama.com and start it, then press Refresh. Everything else in CCLEAR keeps working without it.
+            <p>Ollama is not running. Install and start it to use local AI. Browsing, goals, and manual steps still work.</p>
+            <button type="button" className="sessionBtn sessionBtnPrimary" onClick={p.onOpenOllama}>Install Ollama</button>
           </div>
         )}
         {status?.ollama && !status.activeInstalled && (
@@ -194,10 +219,10 @@ export function SettingsPanel(p: Props) {
                 </li>
               ))}
             </ul>
-            <p className="parkHint">Websites you visit make their own requests; this list is only CCLEAR. Internet entries appear only for optional lookups you ask for (like the weather).</p>
+            <p className="parkHint">Websites you visit make their own requests; this list shows requests made by CCLEAR itself. Current-fact questions can trigger a web lookup, and weather questions can trigger a forecast lookup.</p>
           </div>
         )}
-        <p className="parkHint">All AI runs on this Mac through Ollama. CCLEAR sends no page content to any server. Your goals, parked items and reading progress are stored only on this device.</p>
+        <p className="parkHint">AI generation runs on this Mac through Ollama. Current-fact questions may send a shortened query to DuckDuckGo, article navigation may query Wikipedia, and weather questions may send a place name to Open-Meteo. CCLEAR does not upload page text for AI. Goals, parked items and reading progress are stored on this device.</p>
       </section>
     </div>
   )

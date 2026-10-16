@@ -2,23 +2,25 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { filterCommands, type Command } from '../../shared/palette'
 
 type Props = {
+  mode?: 'all' | 'tabs'
   commands: Command[]
   /** Builds the always-available "do something with what I typed" entries. */
   dynamic: (query: string) => Command[]
   onClose: () => void
 }
 
-export function CommandPalette({ commands, dynamic, onClose }: Props) {
+export function CommandPalette({ mode = 'all', commands, dynamic, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
 
   const results = useMemo(() => {
-    const matched = filterCommands(query, commands, 10)
-    return query.trim() ? [...matched, ...dynamic(query.trim())] : matched
-  }, [query, commands, dynamic])
+    const available = mode === 'tabs' ? commands.filter((command) => command.group === 'Tabs') : commands
+    const matched = filterCommands(query, available, 10)
+    return query.trim() && mode === 'all' ? [...matched, ...dynamic(query.trim())] : matched
+  }, [query, commands, dynamic, mode])
 
-  useEffect(() => setIndex(0), [query])
+  useEffect(() => setIndex(0), [query, mode])
   useEffect(() => {
     listRef.current?.children[index]?.scrollIntoView({ block: 'nearest' })
   }, [index])
@@ -32,12 +34,12 @@ export function CommandPalette({ commands, dynamic, onClose }: Props) {
 
   return (
     <div className="paletteBackdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="palette" role="dialog" aria-label="Command palette">
+      <div className="palette" role="dialog" aria-label={mode === 'tabs' ? 'Search tabs' : 'Command palette'}>
         <input
           className="paletteInput"
           autoFocus
           value={query}
-          placeholder="Type a command, tab, or question…"
+          placeholder={mode === 'tabs' ? 'Search open tabs…' : 'Type a command, tab, or question…'}
           aria-controls="palette-list"
           aria-activedescendant={results[index] ? `pal-${results[index].id}` : undefined}
           onChange={(e) => setQuery(e.target.value)}

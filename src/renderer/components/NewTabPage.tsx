@@ -7,8 +7,13 @@ export type NewTabSessionProps = {
   parked: ParkedItem[]
   recentProgress: ReadingProgress[]
   onStartGoal: (goal: string) => void
+  onEndGoal: () => void
   onToggleStep: (id: string) => void
+  onAddStep: (text: string) => void
+  onRemoveStep: (id: string) => void
+  onOpenParking: () => void
   onRestoreParked: (item: ParkedItem) => void
+  stepsLoading: boolean
 }
 
 type Props = {
@@ -34,6 +39,10 @@ function initialLinks() {
         { name: 'Wikipedia', url: 'https://wikipedia.org' }
       ]
     }
+    const saved = JSON.parse(localStorage.getItem('cclear.shortcuts.v1') || 'null')
+    if (Array.isArray(saved) && saved.length <= 6 && saved.every((link) =>
+      typeof link?.name === 'string' && typeof link?.url === 'string' && /^https?:\/\//i.test(link.url)
+    )) return saved as typeof DEFAULT_LINKS
   } catch {
     // ignore
   }
@@ -41,20 +50,17 @@ function initialLinks() {
 }
 
 const FOCUS_TIPS = [
-  "Break big tasks into small bites.",
-  "One tab at a time. You've got this.",
-  "Breathe in for 4, hold for 4, out for 4.",
-  "What's the ONE thing you need to do right now?",
-  "Progress, not perfection.",
-  "Close the tabs you're not using.",
-  "Set a 25-minute timer and focus on one thing.",
-  "You don't have to finish — just start.",
+  'Break a large task into one small next step.',
+  'Keep the tab you need. Park the rest for later.',
+  'If a page is hard to read, try Reading or Focus.',
+  'A short pause can make the next step clearer.',
 ]
 
 let recommendedOnce = false
 
-export function NewTabPage({ onNavigate, recentHistory, session, parked, recentProgress, onStartGoal, onToggleStep, onRestoreParked }: Props) {
+export function NewTabPage({ onNavigate, recentHistory, session, parked, recentProgress, onStartGoal, onEndGoal, onToggleStep, onAddStep, onRemoveStep, onOpenParking, onRestoreParked, stepsLoading }: Props) {
   const [goalDraft, setGoalDraft] = useState('')
+  const [stepDraft, setStepDraft] = useState('')
   const [addingLink, setAddingLink] = useState(false)
   const [linkDraft, setLinkDraft] = useState('')
   const [searchValue, setSearchValue] = useState('')
@@ -70,6 +76,7 @@ export function NewTabPage({ onNavigate, recentHistory, session, parked, recentP
 
   useEffect(() => {
     if (recommendedOnce || !recentHistory || recentHistory.length === 0) return
+    if (localStorage.getItem('cclear.shortcuts.v1')) return
     recommendedOnce = true
     window.cclearBrowser.ai.recommendLinks(recentHistory).then((recs) => {
       if (recs && recs.length > 0) {
@@ -77,6 +84,10 @@ export function NewTabPage({ onNavigate, recentHistory, session, parked, recentP
       }
     }).catch(() => {})
   }, [recentHistory])
+
+  useEffect(() => {
+    localStorage.setItem('cclear.shortcuts.v1', JSON.stringify(links))
+  }, [links])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -95,6 +106,9 @@ export function NewTabPage({ onNavigate, recentHistory, session, parked, recentP
   else if (hours < 17) greeting = 'Good afternoon'
 
   const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const dateStr = time.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+  const completedSteps = session?.steps.filter((step) => step.done).length ?? 0
+  const nextStepId = session?.steps.find((step) => !step.done)?.id
 
   const removeLink = (url: string) => {
     setLinks((prev) => prev.filter((l) => l.url !== url))
@@ -145,176 +159,159 @@ export function NewTabPage({ onNavigate, recentHistory, session, parked, recentP
 
   return (
     <div className="ntpRoot">
-      {/* Ambient background shapes */}
-      <div className="ntpAmbient">
-        <div className="ntpOrb ntpOrb1" />
-        <div className="ntpOrb ntpOrb2" />
-        <div className="ntpOrb ntpOrb3" />
-      </div>
-
       <div className="ntpContent">
-        {/* Clock */}
-        <div className="ntpClock">{timeStr}</div>
+        <header className="ntpHeader">
+          <div className="ntpIdentity"><span className="ntpIdentityMark">C</span><span>CCLEAR</span></div>
+          <div className="ntpHeaderActions">
+            <time className="ntpClock" dateTime={time.toISOString()}>{dateStr} · {timeStr}</time>
+            <button type="button" className="ntpHeaderBtn" onClick={onOpenParking}>Parked{parked.length ? ` · ${parked.length}` : ''}</button>
+          </div>
+        </header>
 
-        {/* Brand */}
-        <h1 className="ntpBrand">CCLEAR</h1>
-        <p className="ntpSlogan">Clear mind. Clear focus.</p>
+        <div className="ntpLead">
+          <span className="ntpEyebrow">A fresh page</span>
+          <h1 className="ntpGreeting">{greeting}.</h1>
+          <p className="ntpSlogan">Start with the next useful step.</p>
+        </div>
 
-        {/* Greeting */}
-        <p className="ntpGreeting">{greeting}</p>
-
-        {/* Goal-centric home */}
-        {session ? (
-          <section className="ntpGoal" aria-label="Your goal">
-            <div className="ntpGoalLabel">Right now</div>
-            <div className="ntpGoalText">{session.goal}</div>
-            {session.steps.length > 0 && (
-              <ul className="ntpSteps">
-                {session.steps.map((st) => (
-                  <li key={st.id}>
-                    <label>
-                      <input type="checkbox" checked={st.done} onChange={() => onToggleStep(st.id)} />
-                      <span className={st.done ? 'stepDone' : ''}>{st.text}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {(() => {
-              const next = session.steps.find((x) => !x.done)
-              return next ? <div className="ntpNext">Next: {next.text}</div> : null
-            })()}
-          </section>
-        ) : (
-          <form
-            className="ntpGoalForm"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (goalDraft.trim()) {
-                onStartGoal(goalDraft)
-                setGoalDraft('')
-              }
-            }}
-          >
-            <label htmlFor="ntp-goal" className="ntpGoalLabel">What are you here to do?</label>
-            <input id="ntp-goal" className="ntpSearchInput ntpGoalInput" value={goalDraft} onChange={(e) => setGoalDraft(e.target.value)} placeholder="One sentence is enough" maxLength={200} />
-          </form>
-        )}
-
-        {(parked.length > 0 || recentProgress.length > 0) && (
-          <section className="ntpResume" aria-label="Pick up where you left off">
-            {recentProgress.map((p) => (
-              <button key={p.url} type="button" className="ntpResumeItem" onClick={() => onNavigate(p.url)} title={p.url}>
-                <span className="ntpResumeTitle">{p.title || p.url}</span>
-                <span className="ntpResumeMeta">{p.heading ? `${p.heading} · ` : ''}{Math.round(p.ratio * 100)}% read</span>
-              </button>
-            ))}
-            {parked.filter((x) => x.kind === 'tab').slice(0, 3).map((it) => (
-              <button key={it.id} type="button" className="ntpResumeItem" onClick={() => onRestoreParked(it)} title={it.url}>
-                <span className="ntpResumeTitle">{it.title}</span>
-                <span className="ntpResumeMeta">Parked</span>
-              </button>
-            ))}
-          </section>
-        )}
-
-        {/* Search */}
         <form className="ntpSearchForm" onSubmit={handleSearch}>
           <div className="ntpSearchWrap">
-            <svg className="ntpSearchIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg className="ntpSearchIcon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
               className="ntpSearchInput"
               type="text"
+              aria-label="Search or enter a web address"
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
-              placeholder="Search or type a URL"
+              placeholder="Search the web or enter an address"
               autoFocus
             />
+            <span className="ntpSearchHint">↵</span>
           </div>
         </form>
 
-        {/* Quick links */}
-        <div className="ntpLinks">
-          {links.map((link, idx) => {
-            let hostname = link.url
-            try { hostname = new URL(link.url).hostname } catch {}
-            return (
-              <div 
-                key={link.url} 
-                className="ntpLinkWrapper"
-                draggable
-                onDragStart={(e) => handleDragStart(e, idx)}
-                onDragEnter={() => handleDragEnter(idx)}
-                onDragEnd={handleDragEnd}
-                onDragOver={(e) => e.preventDefault()}
-                style={{ opacity: draggedIdx === idx ? 0.5 : 1 }}
-              >
-                <button
-                  className="ntpLinkCard"
-                  onClick={() => onNavigate(link.url)}
-                  title={link.url}
-                >
-                  <img 
-                    src={`https://www.google.com/s2/favicons?domain=${hostname}&sz=64`} 
-                    alt=""
-                    style={{ width: 24, height: 24, borderRadius: 4, marginBottom: 2 }}
-                    draggable="false"
-                  />
-                  <span className="ntpLinkName">{link.name}</span>
-                </button>
-                <button
-                  type="button"
-                  className="ntpLinkDelete"
-                  title="Remove link"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeLink(link.url)
-                  }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
+        <div className="ntpGrid">
+          {session ? (
+            <section className="ntpGoal" aria-label="Current focus">
+              <div className="ntpGoalTop">
+                <div>
+                  <span className="ntpGoalLabel">Current focus</span>
+                  <h2 className="ntpGoalText">{session.goal}</h2>
+                </div>
+                {session.steps.length > 0 && <span className="ntpProgressCount">{completedSteps}<span>/{session.steps.length}</span></span>}
               </div>
-            )
-          })}
-          {addingLink && (
-            <form className="ntpAddForm" onSubmit={handleAddLink}>
-              <input className="sessionInput" autoFocus value={linkDraft} onChange={(e) => setLinkDraft(e.target.value)} onBlur={() => handleAddLink()} placeholder="example.com" />
+              {session.steps.length > 0 && (
+                <>
+                  <div className="ntpProgressTrack" aria-label={`${completedSteps} of ${session.steps.length} steps complete`}>
+                    <div style={{ width: `${completedSteps / session.steps.length * 100}%` }} />
+                  </div>
+                  <div className="ntpStepHeading">Your steps</div>
+                  <ul className="ntpSteps">
+                    {session.steps.map((step) => (
+                      <li key={step.id} className={step.id === nextStepId ? 'ntpStepNext' : ''}>
+                        <label>
+                          <input type="checkbox" checked={step.done} onChange={() => onToggleStep(step.id)} />
+                          <span className={step.done ? 'stepDone' : ''}>{step.text}</span>
+                        </label>
+                        {step.id === nextStepId && <span className="ntpNextBadge">Next</span>}
+                        <button type="button" className="ntpStepRemove" aria-label={`Remove step ${step.text}`} onClick={() => onRemoveStep(step.id)}>×</button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {session.steps.length === 0 && <p className="ntpEmpty">{stepsLoading ? 'Planning steps…' : 'Add one small step to get started.'}</p>}
+              <div className="ntpGoalFooter">
+                <form className="ntpStepAdd" onSubmit={(e) => { e.preventDefault(); if (stepDraft.trim()) { onAddStep(stepDraft.trim()); setStepDraft('') } }}>
+                  <input value={stepDraft} onChange={(e) => setStepDraft(e.target.value)} aria-label="Add a step" placeholder="Add a step" maxLength={160} />
+                  <button type="submit" disabled={!stepDraft.trim()}>Add</button>
+                </form>
+                <button type="button" className="ntpFinish" onClick={onEndGoal}>Finish focus</button>
+              </div>
+            </section>
+          ) : (
+            <form
+              className="ntpGoalForm"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (goalDraft.trim()) {
+                  onStartGoal(goalDraft)
+                  setGoalDraft('')
+                }
+              }}
+            >
+              <span className="ntpGoalLabel">Start here</span>
+              <label htmlFor="ntp-goal" className="ntpGoalText">What do you want to get done?</label>
+              <p className="ntpEmpty">A short goal is enough. CCLEAR will help you break it down.</p>
+              <div className="ntpGoalEntry">
+                <input id="ntp-goal" className="ntpGoalInput" value={goalDraft} onChange={(e) => setGoalDraft(e.target.value)} placeholder="e.g. Finish my history essay" maxLength={200} />
+                <button type="submit" className="sessionBtn sessionBtnPrimary" disabled={!goalDraft.trim()}>Start focus</button>
+              </div>
             </form>
           )}
-          {links.length < 6 && !addingLink && (
-            <div className="ntpLinkWrapper" style={{ opacity: draggedIdx !== null ? 0 : 1, transition: 'opacity 0.2s' }}>
-              <button
-                className="ntpLinkCard ntpLinkAdd"
-                onClick={() => setAddingLink(true)}
-                title="Add shortcut"
-              >
-                <div style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
+
+          <aside className="ntpAside">
+            {(parked.length > 0 || recentProgress.length > 0) && (
+              <section className="ntpSideSection" aria-label="Continue where you left off">
+                <h2 className="ntpSectionTitle">Continue</h2>
+                <div className="ntpResume">
+                  {recentProgress.slice(0, 3).map((progress) => (
+                    <button key={progress.url} type="button" className="ntpResumeItem" onClick={() => onNavigate(progress.url)} title={progress.url}>
+                      <span className="ntpResumeIcon" aria-hidden="true">↗</span>
+                      <span className="ntpResumeCopy"><span className="ntpResumeTitle">{progress.title || progress.url}</span><span className="ntpResumeMeta">{progress.heading ? `${progress.heading} · ` : ''}{Math.round(progress.ratio * 100)}% read</span></span>
+                    </button>
+                  ))}
+                  {parked.filter((item) => item.kind === 'tab').slice(0, 3).map((item) => (
+                    <button key={item.id} type="button" className="ntpResumeItem" onClick={() => onRestoreParked(item)} title={item.url}>
+                      <span className="ntpResumeIcon" aria-hidden="true">↗</span>
+                      <span className="ntpResumeCopy"><span className="ntpResumeTitle">{item.title}</span><span className="ntpResumeMeta">Parked tab</span></span>
+                    </button>
+                  ))}
                 </div>
-                <span className="ntpLinkName">Add shortcut</span>
-              </button>
-            </div>
-          )}
+              </section>
+            )}
+
+            <section className="ntpSideSection" aria-label="Shortcuts">
+              <h2 className="ntpSectionTitle">Shortcuts</h2>
+              <div className="ntpLinks">
+                {links.map((link, idx) => (
+                  <div
+                    key={link.url}
+                    className="ntpLinkWrapper"
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragEnter={() => handleDragEnter(idx)}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={(e) => e.preventDefault()}
+                    style={{ opacity: draggedIdx === idx ? 0.5 : 1 }}
+                  >
+                    <button type="button" className="ntpLinkCard" onClick={() => onNavigate(link.url)} title={link.url}>
+                      <span className="ntpLinkIcon" aria-hidden="true">{link.name.charAt(0).toUpperCase()}</span>
+                      <span className="ntpLinkName">{link.name}</span>
+                    </button>
+                    <button type="button" className="ntpLinkDelete" aria-label={`Remove ${link.name} shortcut`} title="Remove shortcut" onClick={() => removeLink(link.url)}>×</button>
+                  </div>
+                ))}
+                {addingLink && (
+                  <form className="ntpAddForm" onSubmit={handleAddLink}>
+                    <input className="sessionInput" aria-label="Shortcut URL" autoFocus value={linkDraft} onChange={(e) => setLinkDraft(e.target.value)} onBlur={() => handleAddLink()} placeholder="example.com" />
+                  </form>
+                )}
+                {links.length < 6 && !addingLink && (
+                  <button type="button" className="ntpLinkCard ntpLinkAdd" onClick={() => setAddingLink(true)} title="Add shortcut">
+                    <span className="ntpLinkIcon" aria-hidden="true">+</span><span className="ntpLinkName">Add shortcut</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          </aside>
         </div>
 
-        {/* Focus tip */}
         <div className="ntpTip">
-          <span className="ntpTipLabel">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .5 2.2 1.5 3.1.8.9 1.3 1.5 1.5 2.5" />
-              <line x1="9" y1="18" x2="15" y2="18" />
-              <line x1="10" y1="22" x2="14" y2="22" />
-            </svg>
-          </span>
+          <span className="ntpTipLabel">Keep in mind</span>
           <span>{FOCUS_TIPS[tipIndex]}</span>
         </div>
       </div>
