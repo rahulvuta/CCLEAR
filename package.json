@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "author": "Rahul Vuta",
-  "description": "CCLEAR \u2014 clarity-focused browser with local Ollama assistance",
+  "description": "CCLEAR — clarity-focused browser with local Ollama assistance",
   "main": "out/main/main.js",
   "type": "module",
   "scripts": {
@@ -65,13 +65,14 @@
     "react-dom": "^19.2.5"
   },
   "devDependencies": {
-    "electron": "^41.3.0",
     "@types/node": "^22.18.11",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^41.3.0",
     "electron-builder": "^26.7.2",
     "electron-vite": "^5.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.8.4",
     "vite": "^5.4.11",
     "vitest": "^4.1.11"
