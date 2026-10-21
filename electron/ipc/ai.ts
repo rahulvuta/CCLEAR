@@ -218,12 +218,12 @@ async function runAssist(
 }
 
 export function registerAiIpc() {
-  ipcMain.handle('ai:select-page-passages', async (_evt, payload: { query: string; snapshot: PagePassageSnapshot }) => {
+  ipcMain.handle('ai:select-page-passages', async (_evt, payload: { query: string; snapshot: PagePassageSnapshot; kind?: string }) => {
     return selectPagePassages(payload.query, payload.snapshot, (p) => ollamaGenerate({ ...p, priority: 'interactive' }), (completed, total) => {
       if (!_evt.sender.isDestroyed()) {
         _evt.sender.send('ai:chat-progress', {
           think: '',
-          content: `Finding matching passages… ${total ? Math.round((completed / total) * 100) : 100}%`
+          content: `Got it — ${payload.kind === 'underline' ? 'underlining' : payload.kind === 'bold' ? 'emphasizing' : payload.kind === 'scroll' ? 'finding' : 'highlighting'} the part about “${payload.query.slice(0, 64)}”… ${total ? Math.round((completed / total) * 100) : 100}%`
         })
       }
     })

@@ -1,3 +1,5 @@
+import { requestedMarkColor, type MarkColor } from '../shared/markColors'
+
 export type PageMarkMode = 'highlight' | 'bold' | 'underline' | 'scroll' | 'clear'
 
 export type PageMarkQuery = {
@@ -12,7 +14,7 @@ export type PagePassageSelection = { ids: string[]; usedFallback: boolean }
 export type PageActionIntent =
   | { kind: 'none' }
   | { kind: 'clear' }
-  | { kind: Exclude<PageMarkMode, 'clear'>; query: string; terms: string[]; phrases: string[] }
+  | { kind: Exclude<PageMarkMode, 'clear'>; query: string; terms: string[]; phrases: string[]; color?: MarkColor }
 
 const STOP = new Set([
   'a', 'an', 'the', 'to', 'of', 'for', 'and', 'or', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
@@ -152,15 +154,17 @@ export function detectPageActionIntent(text: string): PageActionIntent {
   const markM = t.match(/\b(highlight|underline|bold)\b/i)
   if (markM) {
     const kind = markM[1].toLowerCase() as 'highlight' | 'underline' | 'bold'
+    const color = kind === 'highlight' ? requestedMarkColor(t) : undefined
     const query = t
       .replace(/\b(highlight|underline|bold)\b/gi, ' ')
+      .replace(/\b(?:in|with|using)\s+(?:a\s+)?(?:yellow|mint|green|blue|pink|violet|purple)\b/gi, ' ')
       .replace(/\b(everything|all(?:\s+the)?\s+text|the\s+parts?|the\s+sentences?)\b/gi, ' ')
       .replace(/\b(that|which)\s+(shows?|explains?|mentions?|talks?\s+about|is\s+about)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim()
     const built = buildPageMarkQuery(query)
     if (built.terms.length || built.phrases.length) {
-      return { kind, query, terms: built.terms, phrases: built.phrases }
+      return { kind, query, terms: built.terms, phrases: built.phrases, color }
     }
   }
 
@@ -172,10 +176,11 @@ export function parsePageActionTags(assistant: string): PageActionIntent {
   const m = assistant.match(/\[(HIGHLIGHT|UNDERLINE|BOLD|SCROLL):\s*([\s\S]*?)\]/i)
   if (!m) return { kind: 'none' }
   const kind = m[1].toLowerCase() as Exclude<PageMarkMode, 'clear'>
-  const query = m[2].trim()
+  const color = kind === 'highlight' ? requestedMarkColor(m[2]) : undefined
+  const query = m[2].replace(/\b(?:in|with|using)\s+(?:a\s+)?(?:yellow|mint|green|blue|pink|violet|purple)\b/gi, ' ').trim()
   const built = buildPageMarkQuery(query)
   if (!built.terms.length && !built.phrases.length) return { kind: 'none' }
-  return { kind, query, terms: built.terms, phrases: built.phrases }
+  return { kind, query, terms: built.terms, phrases: built.phrases, color }
 }
 
 export function pageActionSay(
@@ -193,5 +198,5 @@ export function pageActionSay(
   const verb =
     intent.kind === 'highlight' ? 'Highlighted' : intent.kind === 'underline' ? 'Underlined' : 'Bolded'
   const n = result.count === 1 ? '1 sentence' : `${result.count} sentences`
-  return `${verb} ${n}.`
+  return `Got it — ${verb.toLowerCase()} ${n}${intent.kind === 'highlight' && intent.color ? ` in ${intent.color}` : ''}.`
 }
