@@ -193,7 +193,7 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
-          label: 'Toggle Focus Mode',
+          label: 'Toggle Simplify Mode',
           accelerator: 'CmdOrCtrl+Shift+F',
           click: () => sendToRenderer('shortcut', 'toggle-focus')
         },
