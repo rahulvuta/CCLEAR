@@ -12,7 +12,7 @@ export type CCLEARApi = {
     set(patch: Partial<Prefs>): Promise<Prefs>
   }
   ai: {
-    selectPagePassages(query: string, snapshot: PagePassageSnapshot): Promise<PagePassageSelection>
+    selectPagePassages(query: string, snapshot: PagePassageSnapshot, kind?: string): Promise<PagePassageSelection>
     health(): Promise<AiHealth>
     assist(payload: {
       requestId: string
