@@ -1,9 +1,11 @@
 import type { PageMarkMode, PagePassage, PagePassageSnapshot } from '../ai/pageActions'
+import { MARK_COLORS, type MarkColor } from '../shared/markColors'
 
 type MarkOptions = {
   mode: PageMarkMode | 'read'
   passages?: PagePassage[]
   url?: string
+  colorCss?: string
 }
 
 // Serialized into the webview; keep all DOM helpers inside this function.
@@ -103,6 +105,7 @@ function pageMarkRuntime(opts: MarkOptions) {
 
   let firstSpan: HTMLElement | null = null
   let count = 0
+  const created: HTMLElement[] = []
   for (const passage of chosen.reverse()) {
     let marked = false
     for (const part of [...passage.block.nodes].reverse()) {
@@ -115,8 +118,10 @@ function pageMarkRuntime(opts: MarkOptions) {
       const span = document.createElement('span')
       span.className = 'cclear-page-sent'
       span.dataset.cclearPageMark = opts.mode === 'scroll' ? 'highlight' : opts.mode
+      if (opts.colorCss) span.style.setProperty('--cclear-mark-color', opts.colorCss)
       // Wrap each text fragment so existing links and their event handlers stay intact.
       range.surroundContents(span)
+      created.push(span)
       firstSpan = span
       marked = true
     }
@@ -125,6 +130,20 @@ function pageMarkRuntime(opts: MarkOptions) {
   if (firstSpan) {
     firstSpan.classList.add('cclear-page-scroll-target')
     firstSpan.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+  if ((opts.mode === 'highlight' || opts.mode === 'underline') && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    let flashes = 0
+    for (const span of created) {
+      for (const rect of span.getClientRects()) {
+        if (!rect.width || !rect.height || flashes++ >= 24) break
+        const flash = document.createElement('span')
+        flash.className = 'cclear-mark-flash'
+        flash.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;background:' + (opts.mode === 'underline' ? 'rgba(56,189,248,.28)' : opts.colorCss || 'rgba(250,204,21,.42)') + ';'
+        document.body.appendChild(flash)
+        setTimeout(() => flash.remove(), 650)
+      }
+      if (flashes >= 24) break
+    }
   }
   return { count, scrolled: Boolean(firstSpan) }
 }
@@ -137,6 +156,7 @@ export function getPageMarkScript(opts: {
   mode: PageMarkMode
   passages?: PagePassage[]
   url?: PagePassageSnapshot['url']
+  color?: MarkColor
 }): string {
-  return `(${pageMarkRuntime.toString()})(${JSON.stringify(opts)})`
+  return `(${pageMarkRuntime.toString()})(${JSON.stringify({ ...opts, colorCss: opts.color ? MARK_COLORS[opts.color] : undefined })})`
 }

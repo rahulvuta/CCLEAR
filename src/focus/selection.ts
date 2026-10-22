@@ -121,7 +121,7 @@ export function getApplySelectionScript(results: Array<{ id: string; text: strin
 export function getRestoreSelectionScript(): string {
   return `(() => {
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return 0;
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !String(sel).trim()) return 0;
     const range = sel.getRangeAt(0);
     const ids = new Set();
     for (const sp of document.querySelectorAll('span.${SEL_CLASS}')) {

@@ -75,15 +75,6 @@ export function buildReplacementInnerHtml(
   const summary = item.summary ?? ''
   const phrases = item.highlightPhrases?.filter(Boolean).map(String) ?? []
   const terms = item.termEmphasis?.filter(Boolean).map(String) ?? []
-  const sentences = splitForDisplay(summary)
-  // Two or more sentences: one per line, so a simplified paragraph reads as short lines instead of a wall of text.
-  if (sentences.length >= 2) {
-    return (
-      '<span class="cclear-summary-text cclear-lines">' +
-      sentences.map((x) => '<span class="cclear-sent">' + emphasizedSummary(x, phrases, terms) + '</span>').join('') +
-      '</span>'
-    )
-  }
   return '<span class="cclear-summary-text">' + emphasizedSummary(summary, phrases, terms) + '</span>'
 }
 
