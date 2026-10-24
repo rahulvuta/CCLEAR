@@ -42,6 +42,8 @@ import {
 import { selectBlocksForSimplify } from '../focus/blockFilters'
 import { viewportFirst } from '../focus/order'
 import { getInjectReadingAssistScript, getSetFocusVisualScript } from '../focus/injector'
+import { getManualMarkScript } from '../focus/manualMarks'
+import { markColor, type MarkColor } from '../shared/markColors'
 
 const EXTRACT_MIN_CHARS = 90
 /** Top-N passages per page (fewer keeps total time reliably under ~5s with local model). */
@@ -203,11 +205,17 @@ export function App() {
   /** Inject reading-assist CSS into a webview (idempotent) */
   const injectAssist = useCallback(async (w: WebviewTag) => {
     try {
-      await w.executeJavaScript(getInjectReadingAssistScript(), true)
+      await w.executeJavaScript(getInjectReadingAssistScript(markColor(localStorage.getItem('cclear.highlightColor'))), true)
     } catch {
       //
     }
   }, [])
+
+  useEffect(() => {
+    const update = () => { for (const w of Object.values(webviewRefs.current)) if (w) void injectAssist(w) }
+    window.addEventListener('cclear:highlight-color', update)
+    return () => window.removeEventListener('cclear:highlight-color', update)
+  }, [injectAssist])
 
   /** Apply or remove the focus-visual class on a webview */
   const applyFocusVisual = useCallback(async (w: WebviewTag, enabled: boolean) => {
@@ -1118,6 +1126,17 @@ export function App() {
     }
   }
 
+  async function markSelection(mode: 'highlight' | 'underline' | 'remove', color?: MarkColor) {
+    const w = webviewRefs.current[activeIdRef.current]
+    if (!w) return
+    try {
+      await injectAssist(w)
+      const result = await w.executeJavaScript(getManualMarkScript(mode, color || markColor(localStorage.getItem('cclear.highlightColor'))), true) as { count: number; reason?: string }
+      if (!result.count) return notify(result.reason === 'selection' ? 'Select text on the page first.' : result.reason === 'unsupported' ? 'This page does not support text marks.' : 'No marks found in that selection.')
+      notify(mode === 'remove' ? 'Removed marks from the selection.' : mode === 'underline' ? 'Underlined the selection.' : `Highlighted the selection in ${color || markColor(localStorage.getItem('cclear.highlightColor'))}.`, 3500)
+    } catch { notify('Could not mark that selection.') }
+  }
+
   shortcutExtraRef.current = (action, args) => {
     const arg = String(args[0] ?? '')
     switch (action) {
@@ -1172,6 +1191,9 @@ export function App() {
       case 'calm': return calmView()
       case 'selection-simplify': return void simplifySelection()
       case 'selection-restore': return void restoreSelection()
+      case 'selection-highlight': return void markSelection('highlight', arg ? markColor(arg) : undefined)
+      case 'selection-underline': return void markSelection('underline')
+      case 'selection-unmark': return void markSelection('remove')
       case 'selection-explain':
         setSidebarOpen(true)
         return void assistant.send(`Explain this in simple words: “${arg}”`)
@@ -1197,8 +1219,11 @@ export function App() {
     act('reading', 'Reading tools (fonts, line focus)', () => setReadingOpen(true), 'typography dyslexia ruler dim')
     act('sel-simplify', 'Simplify selected text', () => void simplifySelection(), 'phrase sentence shorten easier select')
     act('sel-restore', 'Show original of selected text', () => void restoreSelection(), 'undo unsimplify restore select')
+    act('sel-highlight', 'Highlight selected text', () => void markSelection('highlight'), 'mark color selection')
+    act('sel-underline', 'Underline selected text', () => void markSelection('underline'), 'mark selection')
+    act('sel-unmark', 'Remove marks from selected text', () => void markSelection('remove'), 'unhighlight underline selection')
     act('find', 'Find in page', openFind, 'search text')
-    act('focus', `${focusModeEnabled ? 'Turn off' : 'Turn on'} Focus mode`, () => void persistFocusMode(!focusModeEnabled), 'simplify')
+    act('focus', `${focusModeEnabled ? 'Turn off' : 'Turn on'} Simplify mode`, () => void persistFocusMode(!focusModeEnabled), 'simplify')
     act('settings', 'Settings', () => setSettingsOpen(true), 'preferences model ollama blocker')
     act('assistant', sidebarOpen ? 'Hide assistant' : 'Show assistant', () => setSidebarOpen((v) => !v), 'chat sidebar')
     if (session.state.current) {
@@ -1451,6 +1476,7 @@ export function App() {
           onActivate={activateTab}
           onClose={closeTab}
           onNewTab={newTab}
+          onSearchTabs={() => { setPaletteMode('tabs'); setPaletteOpen(true) }}
           onCreateGroup={createGroup}
           onMoveToGroup={moveToGroup}
           onRemoveFromGroup={removeFromGroup}
