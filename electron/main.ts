@@ -266,6 +266,9 @@ async function createWindow() {
     minWidth: 900,
     minHeight: 620,
     title: 'CCLEAR',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    backgroundColor: '#f6f5f1',
+    icon: path.join(app.getAppPath(), 'assets/icon.png'),
     webPreferences: {
       preload: resolvePreloadPath(),
       contextIsolation: true,
@@ -294,6 +297,9 @@ async function createWindow() {
 disableRemoteContent()
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    try { app.dock?.setIcon(path.join(app.getAppPath(), 'assets/icon.png')) } catch { /* packaged icon remains available */ }
+  }
   installBlocker()
   void createWindow()
   app.on('activate', () => {

@@ -64,16 +64,6 @@ function normalizeUrl(raw: string): string {
   return `https://www.google.com/search?q=${q}`
 }
 
-function faviconForUrl(url: string): string {
-  try {
-    const host = new URL(url).hostname
-    if (host) return `https://www.google.com/s2/favicons?domain=${host}&sz=64`
-  } catch {
-    //
-  }
-  return ''
-}
-
 async function waitForWebviewQuietImpl(w: WebviewTag): Promise<void> {
   try {
     if (typeof w.isLoading !== 'function') return
@@ -181,11 +171,12 @@ export function App() {
   const activeIdRef = useRef(activeId)
   const focusSimplifyScheduleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastInferredRef = useRef<Map<string, string>>(new Map())
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   focusModeEnabledRef.current = focusModeEnabled
   activeIdRef.current = activeId
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0]
+  const isNewTab = !activeTab?.url || activeTab.url === 'about:blank'
 
   const tabContextItems: TabContextItem[] = useMemo(
     () =>
@@ -490,11 +481,9 @@ export function App() {
           simplifyEpochRef.current += 1
         }
 
-        const favicon = effectiveUrl !== 'about:blank' ? faviconForUrl(effectiveUrl) : ''
-
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === id ? { ...t, url: effectiveUrl, favicon: favicon || t.favicon } : t
+            t.id === id ? { ...t, url: effectiveUrl, favicon: '' } : t
           )
         )
         if (activeIdRef.current === id) {
@@ -630,12 +619,10 @@ export function App() {
   function goNavigate() {
     const nextUrl = normalizeUrl(navUrl)
     setNavUrl(nextUrl)
-    const favicon = faviconForUrl(nextUrl)
-
     setTabs((prev) =>
       prev.map((t) =>
         t.id === activeId
-          ? { ...t, url: nextUrl, src: nextUrl, title: t.title, favicon: favicon || t.favicon }
+          ? { ...t, url: nextUrl, src: nextUrl, title: t.title, favicon: '' }
           : t
       )
     )
@@ -740,7 +727,7 @@ export function App() {
   function navigateActive(url: string) {
     const aid = activeIdRef.current
     setNavUrl(url)
-    setTabs((prev) => prev.map((t) => (t.id === aid ? { ...t, url, src: url, title: '', favicon: faviconForUrl(url) || t.favicon } : t)))
+    setTabs((prev) => prev.map((t) => (t.id === aid ? { ...t, url, src: url, title: '', favicon: '' } : t)))
   }
 
   function openTabAt(url: string) {
@@ -1344,7 +1331,7 @@ export function App() {
           onOpenSettings={() => setSettingsOpen((v) => !v)}
           onOpenPalette={() => setPaletteOpen(true)}
         />
-        <SessionBar
+        {!isNewTab && <SessionBar
           session={session.state.current}
           verdict={drift.verdicts[activeId]}
           parkedCount={session.state.parked.length}
@@ -1358,7 +1345,7 @@ export function App() {
           onAddStep={(text) => session.dispatch({ type: 'addStep', text, id: crypto.randomUUID() })}
           onRemoveStep={(id) => session.dispatch({ type: 'removeStep', id })}
           onOpenParking={() => setParkingOpen((v) => !v)}
-        />
+        />}
         <WebviewHost
           recentHistory={recentHistory}
           tabs={tabs}
@@ -1367,12 +1354,7 @@ export function App() {
           onNavigate={(url) => {
             const normalized = normalizeUrl(url)
             setNavUrl(normalized)
-            let favicon = ''
-            try {
-              const host = new URL(normalized).hostname
-              if (host) favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=64`
-            } catch { }
-            setTabs(prev => prev.map(t => t.id === activeId ? { ...t, url: normalized, src: normalized, title: '', favicon: favicon || t.favicon } : t))
+            setTabs(prev => prev.map(t => t.id === activeId ? { ...t, url: normalized, src: normalized, title: '', favicon: '' } : t))
           }}
           session={session.state.current}
           parked={session.state.parked}
@@ -1381,8 +1363,13 @@ export function App() {
             setStepsLoading(true)
             void session.startGoal(goal).finally(() => setStepsLoading(false))
           }}
+          onEndGoal={endSession}
           onToggleStep={(id) => session.dispatch({ type: 'toggleStep', id })}
+          onAddStep={(text) => session.dispatch({ type: 'addStep', text, id: crypto.randomUUID() })}
+          onRemoveStep={(id) => session.dispatch({ type: 'removeStep', id })}
+          onOpenParking={() => setParkingOpen((v) => !v)}
           onRestoreParked={restoreParked}
+          stepsLoading={stepsLoading}
           overlay={
             friction && friction.tabId === activeId ? (
           <FrictionGate
@@ -1496,6 +1483,10 @@ export function App() {
             onModelChanged={() => {
               void window.cclearBrowser.ai.health().then((h) => setAiHealthy(h.ok)).catch(() => setAiHealthy(false))
             }}
+            onOpenOllama={() => {
+              openTabAt('https://ollama.com/download')
+              setSettingsOpen(false)
+            }}
           />
         )}
         {parkingOpen && (
@@ -1544,6 +1535,7 @@ export function App() {
                 <path d="M15 18l-6-6 6-6" />
               </svg>
             )}
+            <span className="chatEdgeText" aria-hidden="true">Assistant</span>
           </button>
           <div className="chatPanel" id="cclear-chat-panel" aria-hidden={!sidebarOpen}>
             {!session.state.current && (

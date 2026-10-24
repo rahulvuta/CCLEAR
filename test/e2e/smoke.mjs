@@ -58,19 +58,41 @@ const navigate = async (cdp, url) => {
   await cdp.waitFor(`[...document.querySelectorAll('.tabTitle')].some(t => t.title.includes(${JSON.stringify(path)}))`, 30000, `tab url ${path}`)
 }
 
+await run('workspace', async (cdp) => {
+  await cdp.waitFor(`!!document.querySelector('.ntpGrid')`, 15000, 'new-tab workspace')
+  check(await cdp.eval(`document.documentElement.dataset.theme === 'light'`), 'new installs start in the light theme')
+  await cdp.screenshot(path.join(shots, '0-workspace.png'))
+
+  await cdp.eval(`document.querySelector('.ntpLinkAdd').click()`)
+  await cdp.eval(setInput('.ntpAddForm input', 'example.com'))
+  await cdp.eval(`document.querySelector('.ntpAddForm').requestSubmit()`)
+  await cdp.waitFor(`[...document.querySelectorAll('.ntpLinkCard')].some(b => b.textContent.includes('Example'))`, 5000, 'shortcut added')
+  await cdp.eval(`location.reload()`)
+  await cdp.waitFor(`document.documentElement.hasAttribute('data-cclear-ready') && [...document.querySelectorAll('.ntpLinkCard')].some(b => b.textContent.includes('Example'))`, 20000, 'shortcut restored')
+  check(true, 'shortcuts survive a reload')
+
+  await cdp.eval(`document.querySelector('[aria-label="Settings"]').click()`)
+  await cdp.waitFor(`!!document.querySelector('.settingsPanel')`, 5000, 'settings open')
+  await cdp.eval(clickText('.settingsPanel [role="radio"]', 'Dark'))
+  check(await cdp.eval(`document.documentElement.dataset.theme === 'dark'`), 'dark theme applies immediately')
+  await cdp.eval(clickText('.settingsPanel [role="radio"]', 'Light'))
+  await cdp.eval(`document.querySelector('[aria-label="Close settings"]').click()`)
+})
+
 await run('session1', async (cdp) => {
-  await cdp.waitFor(`!!document.querySelector('.sessionBarEmpty')`, 15000, 'empty session bar')
+  await cdp.waitFor(`!!document.querySelector('.ntpGoalForm')`, 15000, 'new-tab goal form')
   check(true, 'app starts with a goal prompt')
 
-  await cdp.eval(setInput('#cclear-goal-input', 'Write my essay on the Industrial Revolution'))
-  await cdp.eval(clickText('.sessionBtnPrimary', 'Start'))
-  await cdp.waitFor(`document.querySelector('.sessionGoal')?.textContent.includes('Industrial')`, 5000, 'goal shown')
+  await cdp.eval(setInput('#ntp-goal', 'Write my essay on the Industrial Revolution'))
+  await cdp.eval(`document.querySelector('.ntpGoalForm').requestSubmit()`)
+  await cdp.waitFor(`document.querySelector('.ntpGoalText')?.textContent.includes('Industrial')`, 5000, 'goal shown')
   check(true, 'goal starts a session')
 
-  const stepsBtn = await cdp.waitFor(`(() => { const t=[...document.querySelectorAll('.sessionBtn')].map(b=>b.textContent).find(t=>/^Steps \\d\\/\\d+/.test(t)); return t })()`, 40000, 'AI steps')
-  check(!!stepsBtn, 'local model proposed steps', stepsBtn)
+  const stepsCount = await cdp.waitFor(`document.querySelectorAll('.ntpSteps li').length || null`, 40000, 'AI steps')
+  check(stepsCount > 0, 'local model proposed steps', String(stepsCount))
 
   await navigate(cdp, 'http://127.0.0.1:4599/industrial')
+  await cdp.waitFor(`document.querySelector('.sessionGoal')?.textContent.includes('Industrial')`, 5000, 'goal bar on the page')
   await cdp.waitFor(`!!document.querySelector('.tabVerdict.verdict-on')`, 15000, 'on-goal dot')
   check(true, 'matching page is marked on task')
   await cdp.screenshot(path.join(shots, '1-on-task.png'))
@@ -183,7 +205,7 @@ await run('distraction', async (cdp) => {
   check(/[1-9]\d* blocked/.test(label), 'third-party ad/tracker requests are blocked and counted', label)
 
   // Pause site
-  await cdp.eval(clickText('.topReadBtn', 'Settings'))
+  await cdp.eval(`document.querySelector('[aria-label="Settings"]').click()`)
   await cdp.waitFor(`!!document.querySelector('.settingsPanel')`, 5000, 'settings')
   await cdp.waitFor(`document.querySelector('.settingsPanel').textContent.includes('Recommended')`, 8000, 'model status loaded')
   const settingsText = await cdp.eval(`document.querySelector('.settingsPanel').innerText.replace(/\\n+/g,' | ')`)
@@ -203,7 +225,7 @@ await run('distraction', async (cdp) => {
   check(true, 'pause ends with a deliberate choice to continue')
 
   // leave the shared profile clean for later phases: remove the pause site again
-  await cdp.eval(clickText('.topReadBtn', 'Settings'))
+  await cdp.eval(`document.querySelector('[aria-label="Settings"]').click()`)
   await cdp.waitFor(`!!document.querySelector('.settingsPanel')`, 5000, 'settings')
   await cdp.eval(`document.querySelector('.settingsPanel [aria-label="Remove 127.0.0.1"]')?.click()`)
   await cdp.waitFor(`!document.querySelector('.settingsPanel [aria-label="Remove 127.0.0.1"]')`, 3000, 'pause site removed')
@@ -230,7 +252,7 @@ await run('tabs-and-ledger', async (cdp) => {
   check(/minecraft/i.test(chip), 'multi-tab answer cites the right tab', chip.slice(0, 60))
 
   // privacy ledger: CCLEAR itself should have only talked to the local model
-  await cdp.eval(clickText('.topReadBtn', 'Settings'))
+  await cdp.eval(`document.querySelector('[aria-label="Settings"]').click()`)
   await cdp.waitFor(`!!document.querySelector('.ledger')`, 5000, 'ledger')
   const ledger = await cdp.eval(`document.querySelector('.ledger').innerText.replace(/\\n+/g,' | ')`)
   console.log('      ledger:', ledger.slice(0, 200))
@@ -350,6 +372,26 @@ await run('selection-simplify', async (cdp) => {
   check(after === before, 'show original restores the exact text, sentence by sentence')
   wv.close()
 })
+
+if (!process.env.E2E_ONLY || process.env.E2E_ONLY.split(',').includes('offline-setup')) {
+  const offlineUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'cclear-offline-ud-'))
+  const offlineApp = await launchApp({ root, userData: offlineUserData, port: 9333, env: { CCLEAR_OLLAMA_HOST: 'http://127.0.0.1:1' } })
+  const cdp = new Cdp(offlineApp.page.webSocketDebuggerUrl)
+  try {
+    await cdp.waitFor(`!!document.querySelector('.settingsPanel .setWarn')`, 15000, 'first-run AI setup')
+    check(await cdp.eval(`document.querySelector('.setWarn').textContent.includes('Ollama is not running')`), 'first run explains unavailable local AI')
+    await cdp.screenshot(path.join(shots, '16-offline-setup.png'))
+    await cdp.eval(clickText('.setWarn button', 'Install Ollama'))
+    await cdp.waitFor(`[...document.querySelectorAll('.tabTitle')].some(t => t.title.includes('ollama.com/download'))`, 10000, 'Ollama download tab')
+    check(await cdp.eval(`!document.querySelector('.settingsPanel')`), 'install action opens the download page and closes setup')
+  } catch (e) {
+    check(false, 'offline-setup threw', e.message)
+    await cdp.screenshot(path.join(shots, 'offline-setup-error.png')).catch(() => {})
+  } finally {
+    cdp.close()
+    await stopApp(offlineApp.child, 9333)
+  }
+}
 
 server.close()
 console.log(`\nscreenshots: ${shots}`)

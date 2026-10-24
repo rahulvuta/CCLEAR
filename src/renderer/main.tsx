@@ -3,6 +3,14 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App'
 import './styles/theme.css'
 
+try {
+  const storedTheme = localStorage.getItem('cclear.theme')
+  document.documentElement.dataset.theme = storedTheme === 'dark' || storedTheme === 'system' ? storedTheme : 'light'
+} catch {
+  document.documentElement.dataset.theme = 'light'
+}
+if (navigator.platform.toLowerCase().includes('mac')) document.documentElement.classList.add('platform-mac')
+
 /** Demo mode (npm run demo): shorter nudge timing and links to the bundled demo pages. */
 async function applyDemoMode() {
   try {
