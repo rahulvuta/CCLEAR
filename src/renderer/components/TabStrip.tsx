@@ -12,6 +12,7 @@ type Props = {
   onActivate: (id: string) => void
   onClose: (id: string) => void
   onNewTab: () => void
+  onSearchTabs: () => void
   onCreateGroup: (id: string) => void
   onMoveToGroup: (id: string, group: string) => void
   onRemoveFromGroup: (id: string) => void
@@ -105,6 +106,9 @@ export function TabStrip(p: Props) {
 
   return (
     <div className="tabStrip" role="tablist" aria-label="Open tabs">
+      <button type="button" className="tabSearchBtn" aria-label="Search tabs" title="Search tabs" onClick={p.onSearchTabs}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 9 7 7 7-7" /></svg>
+      </button>
       {runs.map((run, index) => {
         const collapsed = Boolean(run.group && p.groups[run.group]?.collapsed)
         const color = p.groups[run.group]?.color || 'blue'

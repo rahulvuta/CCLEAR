@@ -52,7 +52,7 @@ function initialLinks() {
 const FOCUS_TIPS = [
   'Break a large task into one small next step.',
   'Keep the tab you need. Park the rest for later.',
-  'If a page is hard to read, try Reading or Focus.',
+  'If a page is hard to read, try Reading or Simplify.',
   'A short pause can make the next step clearer.',
 ]
 
