@@ -1,9 +1,11 @@
 import type { PageMarkMode, PagePassage, PagePassageSnapshot } from '../ai/pageActions'
+import { MARK_COLORS, type MarkColor } from '../shared/markColors'
 
 type MarkOptions = {
   mode: PageMarkMode | 'read'
   passages?: PagePassage[]
   url?: string
+  colorCss?: string
 }
 
 // Serialized into the webview; keep all DOM helpers inside this function.
@@ -115,6 +117,7 @@ function pageMarkRuntime(opts: MarkOptions) {
       const span = document.createElement('span')
       span.className = 'cclear-page-sent'
       span.dataset.cclearPageMark = opts.mode === 'scroll' ? 'highlight' : opts.mode
+      if (opts.colorCss) span.style.setProperty('--cclear-mark-color', opts.colorCss)
       // Wrap each text fragment so existing links and their event handlers stay intact.
       range.surroundContents(span)
       firstSpan = span
@@ -137,6 +140,7 @@ export function getPageMarkScript(opts: {
   mode: PageMarkMode
   passages?: PagePassage[]
   url?: PagePassageSnapshot['url']
+  color?: MarkColor
 }): string {
-  return `(${pageMarkRuntime.toString()})(${JSON.stringify(opts)})`
+  return `(${pageMarkRuntime.toString()})(${JSON.stringify({ ...opts, colorCss: opts.color ? MARK_COLORS[opts.color] : undefined })})`
 }

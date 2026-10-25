@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { buildReplacementInnerHtml, splitForDisplay } from '../../src/focus/simplifyApplyHtml'
 
 describe('simplified paragraph rendering', () => {
-  it('puts each sentence on its own line when there are two or more', () => {
+  it('keeps multiple sentences in a readable paragraph', () => {
     const html = buildReplacementInnerHtml({ summary: 'Watt added a condenser in 1769. It saved fuel. Factories could use steam.' }, '')
-    expect(html).toContain('cclear-lines')
-    expect(html.match(/class="cclear-sent"/g)).toHaveLength(3)
+    expect(html).toContain('cclear-summary-text')
+    expect(html).toContain('1769. It saved fuel. Factories')
+    expect(html).not.toContain('cclear-sent')
   })
   it('keeps a single sentence inline', () => {
     const html = buildReplacementInnerHtml({ summary: 'Steam engines turn heat into motion.' }, '')

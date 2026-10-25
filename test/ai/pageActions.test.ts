@@ -33,6 +33,15 @@ describe('page mark intents', () => {
     expect(intent.terms).toContain('rayleigh')
   })
 
+  it('keeps requested highlight color out of the search terms', () => {
+    const intent = detectPageActionIntent('highlight the part about steam power in blue')
+    expect(intent.kind).toBe('highlight')
+    if (intent.kind === 'none' || intent.kind === 'clear') throw new Error('expected highlight')
+    expect(intent.color).toBe('blue')
+    expect(intent.terms).toContain('steam')
+    expect(intent.terms).not.toContain('blue')
+  })
+
   it('drops filler words from terms', () => {
     expect(pageActionTerms('the part where it talks about waves of light')).toEqual(
       expect.arrayContaining(['waves'])

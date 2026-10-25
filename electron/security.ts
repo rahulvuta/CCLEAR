@@ -80,8 +80,14 @@ export function hardenWebContents(win: BrowserWindow) {
       if (sel) {
         const short = sel.length > 28 ? `${sel.slice(0, 28)}…` : sel
         template.push(
-          { label: 'Simplify selected text', click: () => send('selection-simplify') },
+          ...(!sel0.simplified ? [{ label: 'Simplify selected text', click: () => send('selection-simplify') }] : []),
           ...(sel0.simplified ? [{ label: 'Show original of selected text', click: () => send('selection-restore') }] : []),
+          { label: 'Highlight selection', submenu: [
+            { label: 'Default color', click: () => send('selection-highlight') },
+            ...(['yellow', 'mint', 'blue', 'pink', 'violet'] as const).map((color) => ({ label: color[0].toUpperCase() + color.slice(1), click: () => send('selection-highlight', color) }))
+          ] },
+          { label: 'Underline selection', click: () => send('selection-underline') },
+          { label: 'Remove highlight or underline', click: () => send('selection-unmark') },
           { type: 'separator' as const },
           { label: 'Explain this simply', click: () => send('selection-explain', sel) },
           { label: 'Define', click: () => send('selection-define', sel) },

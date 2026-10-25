@@ -6,6 +6,7 @@ import type { UITab } from '../components/TabStrip'
 import { detectPageActionIntent, buildPageMarkQuery, pageActionSay, type PageActionIntent, type PagePassageSnapshot } from '../../ai/pageActions'
 import type { ToolCall } from '../../ai/tools'
 import { getPageMarkScript, getPagePassagesScript } from '../../focus/pageMarks'
+import { requestedMarkColor } from '../../shared/markColors'
 import { needsScreenVision } from '../../ai/screenVision'
 import { looksLikePageQuestion } from '../../ai/askPage'
 import { looksLikeTabsQuestion } from '../../ai/askTabs'
@@ -68,12 +69,13 @@ export function useAssistant(env: AssistantEnv) {
     if (!wv || intent.kind === 'none') return { count: 0, scrolled: false }
     await e.injectAssist(wv)
     if (intent.kind === 'clear') return wv.executeJavaScript(getPageMarkScript({ mode: 'clear' }), true)
-    setDraft('Finding matching passages…')
+    const verb = intent.kind === 'scroll' ? 'finding' : intent.kind === 'bold' ? 'emphasizing' : intent.kind === 'underline' ? 'underlining' : 'highlighting'
+    setDraft(`Got it — ${verb} the part about “${intent.query.slice(0, 64)}”…`)
     const snapshot: PagePassageSnapshot = await wv.executeJavaScript(getPagePassagesScript(), true)
-    const selection = await window.cclearBrowser.ai.selectPagePassages(intent.query, snapshot)
+    const selection = await window.cclearBrowser.ai.selectPagePassages(intent.query, snapshot, intent.kind)
     const ids = new Set(selection.ids)
     const raw = await wv.executeJavaScript(
-      getPageMarkScript({ mode: intent.kind, url: snapshot.url, passages: snapshot.passages.filter((p) => ids.has(p.id)) }),
+      getPageMarkScript({ mode: intent.kind, color: intent.color, url: snapshot.url, passages: snapshot.passages.filter((p) => ids.has(p.id)) }),
       true
     )
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
@@ -109,9 +111,11 @@ export function useAssistant(env: AssistantEnv) {
       case 'clear_marks': await runPageMark({ kind: 'clear' }); return true
       case 'highlight': case 'underline': case 'bold': case 'scroll_to': {
         const kind = call.name === 'scroll_to' ? 'scroll' : call.name
-        const q = buildPageMarkQuery(a.query)
+        const color = kind === 'highlight' ? requestedMarkColor(a.query) : undefined
+        const query = a.query.replace(/\b(?:in|with|using)\s+(?:a\s+)?(?:yellow|mint|green|blue|pink|violet|purple)\b/gi, ' ').trim()
+        const q = buildPageMarkQuery(query)
         if (!q.terms.length && !q.phrases.length) return false
-        const r = await runPageMark({ kind, query: a.query, terms: q.terms, phrases: q.phrases })
+        const r = await runPageMark({ kind, query, terms: q.terms, phrases: q.phrases, color })
         return Number((r as any)?.count || 0) > 0
       }
     }

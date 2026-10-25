@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import type { AssistLevel } from '../../shared/session'
 import type { LedgerSummary } from '../../shared/ledger'
+import { MARK_COLORS, MARK_COLOR_NAMES, markColor, type MarkColor } from '../../shared/markColors'
 
 type Status = Awaited<ReturnType<typeof window.cclearBrowser.models.status>>
 
@@ -30,6 +31,7 @@ export function SettingsPanel(p: Props) {
     const saved = document.documentElement.dataset.theme
     return saved === 'dark' || saved === 'system' ? saved : 'light'
   })
+  const [highlightColor, setHighlightColor] = useState<MarkColor>(() => markColor(localStorage.getItem('cclear.highlightColor')))
   const [status, setStatus] = useState<Status | null>(null)
   const [pulling, setPulling] = useState<{ name: string; pct: number; text: string } | null>(null)
   const [pullError, setPullError] = useState('')
@@ -98,6 +100,20 @@ export function SettingsPanel(p: Props) {
       </section>
 
       <section className="setSection">
+        <h3>Default highlight color</h3>
+        <p className="parkHint">Used when you or the assistant highlight without naming a color.</p>
+        <div className="markColorChoices" role="radiogroup" aria-label="Default highlight color">
+          {MARK_COLOR_NAMES.map((color) => (
+            <button key={color} type="button" role="radio" aria-label={color} aria-checked={highlightColor === color} className="markColorChoice" style={{ '--mark-swatch': MARK_COLORS[color] } as CSSProperties} onClick={() => {
+              setHighlightColor(color)
+              localStorage.setItem('cclear.highlightColor', color)
+              window.dispatchEvent(new Event('cclear:highlight-color'))
+            }}><span /></button>
+          ))}
+        </div>
+      </section>
+
+      <section className="setSection">
         <h3>Local AI</h3>
         {!status && <p className="parkHint">Checking…</p>}
         {status && !status.ollama && (
@@ -148,7 +164,7 @@ export function SettingsPanel(p: Props) {
             {pullError && <div className="readErr" role="alert">{pullError}</div>}
             {status.ollama && (
               <p className="parkHint">
-                Focus-mode rewrites are checked by{' '}
+                Simplify-mode rewrites are checked by{' '}
                 {status.simplifyChecks === 'rules'
                   ? 'rules only (numbers, dates, grammar). For model fact-checking, install qwen3:8b. Every paragraph is one click from its original.'
                   : `${status.simplifyChecks} as a second reader. Every paragraph is one click from its original.`}

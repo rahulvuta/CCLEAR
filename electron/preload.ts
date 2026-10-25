@@ -11,8 +11,8 @@ contextBridge.exposeInMainWorld('cclearBrowser', {
     set: (patch: Partial<Prefs>): Promise<Prefs> => ipcRenderer.invoke('prefs:set', patch)
   },
   ai: {
-    selectPagePassages: (query: string, snapshot: PagePassageSnapshot): Promise<PagePassageSelection> =>
-      ipcRenderer.invoke('ai:select-page-passages', { query, snapshot }),
+    selectPagePassages: (query: string, snapshot: PagePassageSnapshot, kind?: string): Promise<PagePassageSelection> =>
+      ipcRenderer.invoke('ai:select-page-passages', { query, snapshot, kind }),
     health: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('ai:health'),
     assist: (payload: {
       requestId: string
