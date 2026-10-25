@@ -131,7 +131,7 @@ export function TabStrip(p: Props) {
                     if (id) p.onMoveToGroup(id, run.group)
                     setDraggedId(null)
                   }}
-                ><span className="tabGroupDot" />{run.group}<span className="tabGroupCount">{run.tabs.length}</span><span className="tabGroupChevron">⌄</span></button>
+                ><span className="tabGroupDot" />{run.group}</button>
                 <button type="button" className="tabGroupMore" aria-label={'Edit ' + run.group + ' group'} onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNameDraft(run.group); setMenu({ kind: 'group', group: run.group, x: r.left, y: r.bottom + 6 }) }}>···</button>
               </div>
             )}
