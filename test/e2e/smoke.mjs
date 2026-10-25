@@ -436,8 +436,9 @@ await run('tabs', async (cdp) => {
   await cdp.waitFor(`document.querySelector('.tabGroupHeader')?.textContent.includes('Group 1')`, 5000, 'new tab group')
   await cdp.eval(rightClick('.tab', 1))
   await cdp.eval(clickText('.tabContextMenu [role="menuitem"]', 'Group 1'))
-  await cdp.waitFor(`document.querySelector('.tabGroup .tab') && document.querySelector('.tabGroupHeader .tabGroupCount')?.textContent === '2'`, 5000, 'second tab grouped')
+  await cdp.waitFor(`document.querySelector('.tabGroupHeader + .tabGroup')?.querySelectorAll('.tab').length === 2`, 5000, 'second tab grouped')
   check(true, 'tabs can be manually grouped')
+  check(await cdp.eval(`!document.querySelector('.tabGroupCount, .tabGroupChevron')`), 'group chip shows only its name and options')
 
   await cdp.eval(`document.querySelector('.tabGroupMore').click()`)
   await cdp.eval(setInput('.tabGroupRename input', 'Research'))
@@ -471,7 +472,7 @@ await run('tabs-restore', async (cdp) => {
   await cdp.waitFor(`document.querySelectorAll('.tab').length >= 3`, 10000, 'tabs restored after restart')
   check(await cdp.eval(`document.querySelector('.tabGroupHeader')?.textContent.includes('Research')`), 'group name survives restart')
   check(await cdp.eval(`document.querySelector('.tabGroupHeader')?.dataset.color === 'teal'`), 'group color survives restart')
-  check(await cdp.eval(`document.querySelector('.tabGroupHeader .tabGroupCount')?.textContent === '2'`), 'group membership survives restart')
+  check(await cdp.eval(`document.querySelector('.tabGroupHeader + .tabGroup')?.querySelectorAll('.tab').length === 2`), 'group membership survives restart')
 }, tabUserData)
 
 if (!process.env.E2E_ONLY || process.env.E2E_ONLY.split(',').includes('offline-setup')) {

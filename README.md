@@ -67,6 +67,10 @@ npm run bench       # benchmarks installed models on CCLEAR's actual tasks (see 
 
 Electron + React + TypeScript. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the layout, [docs/CAC_2026_PLAN.md](docs/CAC_2026_PLAN.md) for what was built and why, and [docs/MODEL_BENCHMARK.md](docs/MODEL_BENCHMARK.md) for model results.
 
+## Development and tools
+
+I designed CCLEAR and built its early Electron browser shell, much of its main-process logic, the local Ollama integration, and its initial interface. I wrote much of the early code myself and tested the main workflows. I made the final decisions about features and design. I used Claude Code mostly to refine and debug local-model calls, polish parts of the interface and animations, and investigate problems. Some of those refinements involved code suggested or edited by Claude Code.
+
 ## Known limitations
 
 - Needs Ollama; the experience on 8 GB Macs is **untested** (a smaller model is suggested but not benchmarked).
