@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { ChatSidebar } from './components/ChatSidebar'
 import { TabStrip, type UITab } from './components/TabStrip'
+import { GROUP_COLORS, cleanGroupName, loadGroupMap, moveBeforeTab, moveIntoGroup, nextGroupName, type GroupColor, type GroupMap } from './tabGroups'
 import { TopBar } from './components/TopBar'
 import { WebviewHost } from './components/WebviewHost'
 import type { PageBlockForSimplify, TabContextItem, TabContextSummary } from '../shared/types'
@@ -121,9 +122,15 @@ async function waitForWebviewQuiet(w: WebviewTag): Promise<void> {
 }
 
 export function App() {
+  const freshWindow = useMemo(() => new URLSearchParams(window.location.search).has('newWindow'), [])
   const firstId = useMemo(() => String(crypto.randomUUID()), [])
   const [tabs, setTabs] = useState<UITab[]>([{ id: firstId, url: 'about:blank', src: 'about:blank', title: '' }])
   const [activeId, setActiveId] = useState(firstId)
+  const [groups, setGroups] = useState<GroupMap>(() => {
+    try { return loadGroupMap(localStorage.getItem('cclear.tabGroups.v1')) } catch { return {} }
+  })
+  const [groupingBusy, setGroupingBusy] = useState(false)
+  const closedTabsRef = useRef<Array<{ tab: UITab; index: number }>>([])
   const [navUrl, setNavUrl] = useState('about:blank')
   const [focusModeEnabled, setFocusModeEnabled] = useState(false)
   const [simplifyBusy, setSimplifyBusy] = useState(false)
@@ -165,6 +172,10 @@ export function App() {
   const webviewRefs = useRef<Record<string, WebviewTag | null>>({})
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+
+  useEffect(() => {
+    try { localStorage.setItem('cclear.tabGroups.v1', JSON.stringify(groups)) } catch { /* */ }
+  }, [groups])
 
   const setupOnce = useRef(new WeakSet<WebviewTag>())
   const focusModeEnabledRef = useRef(focusModeEnabled)
@@ -660,28 +671,99 @@ export function App() {
     setActiveId(id)
   }
 
-  function closeTab(idToClose: string) {
-    if (tabs.length <= 1) return
-    const idx = tabs.findIndex((t) => t.id === idToClose)
-    if (idx < 0) return
-
-    delete webviewRefs.current[idToClose]
-    delete historyMapRef.current[idToClose]
-    invalidateSimplifyStateForTab(idToClose)
-
-    // Clean up context state for the closed tab
-    setTabContexts(p => { const n = { ...p }; delete n[idToClose]; return n })
-    setContextLoading(p => { const n = { ...p }; delete n[idToClose]; return n })
-
-    const filtered = tabs.filter((t) => t.id !== idToClose)
-
-    let nextActive = activeId
-    if (activeId === idToClose) {
-      nextActive = tabs[idx - 1]?.id ?? filtered[0]?.id ?? activeId
+  function closeTabs(ids: string[]) {
+    const current = tabsRef.current
+    const closing = current.map((tab, index) => ({ tab, index })).filter(({ tab }) => ids.includes(tab.id))
+    if (!closing.length || (current.length === 1 && current[0].url === 'about:blank')) return
+    closedTabsRef.current = [...closedTabsRef.current, ...closing.filter(({ tab }) => tab.url !== 'about:blank')].slice(-25)
+    for (const { tab } of closing) {
+      delete webviewRefs.current[tab.id]
+      delete historyMapRef.current[tab.id]
+      invalidateSimplifyStateForTab(tab.id)
     }
+    setTabContexts((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !ids.includes(id))))
+    setContextLoading((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => !ids.includes(id))))
+    const remaining = current.filter((tab) => !ids.includes(tab.id))
+    if (!remaining.length) {
+      const id = String(crypto.randomUUID())
+      setTabs([{ id, url: 'about:blank', src: 'about:blank', title: '' }])
+      setActiveId(id)
+      return
+    }
+    setTabs(remaining)
+    if (ids.includes(activeIdRef.current)) {
+      const firstIndex = closing[0].index
+      const next = remaining[Math.min(firstIndex, remaining.length - 1)]
+      activateTab(next.id, next.group)
+    }
+  }
 
-    setTabs(filtered)
-    setActiveId(nextActive)
+  function closeTab(id: string) { closeTabs([id]) }
+
+  function reopenClosedTab() {
+    const entry = closedTabsRef.current.pop()
+    if (!entry) return
+    const current = tabsRef.current
+    const restored = { ...entry.tab, id: String(crypto.randomUUID()), src: entry.tab.url }
+    const next = current.length === 1 && current[0].url === 'about:blank' ? [] : [...current]
+    next.splice(Math.min(entry.index, next.length), 0, restored)
+    setTabs(next)
+    activateTab(restored.id, restored.group)
+  }
+
+  function activateTab(id: string, group?: string) {
+    const name = group ?? tabsRef.current.find((tab) => tab.id === id)?.group
+    if (name && groups[name]?.collapsed) setGroups((previous) => ({ ...previous, [name]: { ...previous[name], collapsed: false } }))
+    setActiveId(id)
+  }
+
+  function createGroup(id: string) {
+    const name = nextGroupName([...Object.keys(groups), ...tabsRef.current.map((tab) => tab.group || '')])
+    setGroups((previous) => ({ ...previous, [name]: { color: GROUP_COLORS[Object.keys(previous).length % GROUP_COLORS.length], collapsed: false } }))
+    setTabs((previous) => previous.map((tab) => tab.id === id ? { ...tab, group: name } : tab))
+  }
+
+  function moveToGroup(id: string, name: string) {
+    setGroups((previous) => previous[name] ? { ...previous, [name]: { ...previous[name], collapsed: false } } : { ...previous, [name]: { color: GROUP_COLORS[Object.keys(previous).length % GROUP_COLORS.length], collapsed: false } })
+    setTabs((previous) => moveIntoGroup(previous, id, name))
+  }
+
+  function removeFromGroup(id: string) {
+    setTabs((previous) => {
+      const moving = previous.find((tab) => tab.id === id)
+      if (!moving?.group) return previous
+      const rest = previous.filter((tab) => tab.id !== id)
+      let last = -1
+      for (let index = 0; index < rest.length; index++) if (rest[index].group === moving.group) last = index
+      rest.splice(last + 1, 0, { ...moving, group: undefined })
+      return rest
+    })
+  }
+
+  function renameGroup(name: string, raw: string) {
+    const next = cleanGroupName(raw)
+    if (!next || next === name) return
+    if (tabsRef.current.some((tab) => tab.group?.toLocaleLowerCase() === next.toLocaleLowerCase())) {
+      notify('A group with that name already exists.')
+      return
+    }
+    setTabs((previous) => previous.map((tab) => tab.group === name ? { ...tab, group: next } : tab))
+    setGroups((previous) => {
+      const copy = { ...previous }
+      const meta = copy[name] || { color: 'blue' as GroupColor, collapsed: false }
+      delete copy[name]
+      copy[next] = meta
+      return copy
+    })
+  }
+
+  function ungroup(name: string) {
+    setTabs((previous) => previous.map((tab) => tab.group === name ? { ...tab, group: undefined } : tab))
+    setGroups((previous) => { const copy = { ...previous }; delete copy[name]; return copy })
+  }
+
+  function closeGroup(name: string) {
+    closeTabs(tabsRef.current.filter((tab) => tab.group === name).map((tab) => tab.id))
   }
 
   // First run: if the local AI is not ready, show the setup panel once instead of failing quietly.
@@ -704,6 +786,7 @@ export function App() {
   const [readingOpen, setReadingOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteMode, setPaletteMode] = useState<'all' | 'tabs'>('all')
   const [recap, setRecap] = useState<Recap | null>(null)
   const [dietDismissedUntil, setDietDismissedUntil] = useState(0)
   const [calmNote, setCalmNote] = useState('')
@@ -830,16 +913,17 @@ export function App() {
   useEffect(() => {
     if (restoredOnce.current || !session.ready) return
     restoredOnce.current = true
+    if (freshWindow) return
     const saved = session.restored?.tabs ?? []
     if (!saved.length) return
     // If the user already started browsing before the saved state finished loading, do not overwrite their tabs.
     const untouched = tabsRef.current.length === 1 && (!tabsRef.current[0].url || tabsRef.current[0].url === 'about:blank')
     if (!untouched) return
-    const next = saved.map((t) => ({ id: String(crypto.randomUUID()), url: t.url, src: t.url, title: t.title, favicon: t.favicon }))
+    const next = saved.map((t) => ({ id: String(crypto.randomUUID()), url: t.url, src: t.url, title: t.title, favicon: t.favicon, group: t.group }))
     setTabs(next)
     const activeIdx = Math.max(0, saved.findIndex((t) => t.active))
     setActiveId(next[activeIdx].id)
-  }, [session.ready, session.restored])
+  }, [session.ready, session.restored, freshWindow])
 
   // Marks the moment the saved session has loaded and its tabs were restored, so automated checks and demos
   // know it is safe to start interacting (earlier input could be overwritten by the restore).
@@ -851,14 +935,14 @@ export function App() {
 
   // Persist the open tabs so a restart (or crash) returns to the same place.
   const tabsSnapshot = useMemo(
-    () => JSON.stringify(tabs.filter((t) => t.url && t.url !== 'about:blank').map((t) => ({ url: t.url, title: t.title, favicon: t.favicon, active: t.id === activeId }))),
+    () => JSON.stringify(tabs.filter((t) => t.url && t.url !== 'about:blank').map((t) => ({ url: t.url, title: t.title, favicon: t.favicon, group: t.group, active: t.id === activeId }))),
     [tabs, activeId]
   )
   useEffect(() => {
-    if (!session.ready || !restoredOnce.current) return
+    if (!session.ready || !restoredOnce.current || freshWindow) return
     session.dispatch({ type: 'saveTabs', tabs: JSON.parse(tabsSnapshot) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabsSnapshot, session.ready])
+  }, [tabsSnapshot, session.ready, freshWindow])
 
   // Remember how far the user got on the active page.
   const recordProgress = useCallback(async (tabId: string) => {
@@ -1037,8 +1121,52 @@ export function App() {
   shortcutExtraRef.current = (action, args) => {
     const arg = String(args[0] ?? '')
     switch (action) {
+      case 'close-tab': return closeTab(activeIdRef.current)
+      case 'reopen-tab': return reopenClosedTab()
+      case 'next-tab': {
+        const current = tabsRef.current
+        const index = current.findIndex((tab) => tab.id === activeIdRef.current)
+        if (current.length > 1) activateTab(current[(index + 1) % current.length].id)
+        return
+      }
+      case 'prev-tab': {
+        const current = tabsRef.current
+        const index = current.findIndex((tab) => tab.id === activeIdRef.current)
+        if (current.length > 1) activateTab(current[(index - 1 + current.length) % current.length].id)
+        return
+      }
+      case 'go-tab': {
+        const current = tabsRef.current
+        const index = Number(args[0])
+        const target = index === -1 ? current[current.length - 1] : current[index]
+        if (target) activateTab(target.id)
+        return
+      }
+      case 'move-tab-left':
+      case 'move-tab-right': {
+        const current = tabsRef.current
+        const index = current.findIndex((tab) => tab.id === activeIdRef.current)
+        const other = current[index + (action === 'move-tab-left' ? -1 : 1)]
+        if (!other) return
+        setTabs((previous) => {
+          const copy = [...previous]
+          const from = copy.findIndex((tab) => tab.id === activeIdRef.current)
+          const to = copy.findIndex((tab) => tab.id === other.id)
+          const [moving] = copy.splice(from, 1)
+          copy.splice(to, 0, { ...moving, group: other.group })
+          return copy
+        })
+        return
+      }
       case 'find': return openFind()
-      case 'palette': return setPaletteOpen(true)
+      case 'find-next': return findOpen ? runFind(true) : openFind()
+      case 'find-prev': return findOpen ? runFind(false) : openFind()
+      case 'palette': setPaletteMode('all'); return setPaletteOpen(true)
+      case 'tab-search': setPaletteMode('tabs'); return setPaletteOpen(true)
+      case 'home': return navigateActive('about:blank')
+      case 'print': return void webviewRefs.current[activeIdRef.current]?.print()
+      case 'devtools': return void webviewRefs.current[activeIdRef.current]?.openDevTools()
+      case 'stop-loading': return void webviewRefs.current[activeIdRef.current]?.stop()
       case 'open-url-new-tab': return openTabAt(arg)
       case 'reader': return void reading.openReader()
       case 'calm': return calmView()
@@ -1059,6 +1187,8 @@ export function App() {
     const cmds: Command[] = []
     const act = (id: string, title: string, run: () => void, keywords = '', hint?: string) => cmds.push({ id, title, run, keywords, hint, group: 'Actions' })
     act('new-tab', 'New tab', newTab, 'open blank')
+    act('reopen-tab', 'Reopen closed tab', reopenClosedTab, 'restore undo close', navigator.platform.includes('Mac') ? '⌘⇧T' : 'Ctrl+Shift+T')
+    act('group-tab', 'Add this tab to a group', () => createGroup(activeIdRef.current), 'organize tabs')
     act('park-tab', 'Park this tab for later', () => parkTab(activeIdRef.current), 'save close later')
     act('park-thought', 'Park a thought', () => setParkingOpen(true), 'note idea remember')
     act('parking', 'Open parking lot', () => setParkingOpen(true), 'parked saved')
@@ -1080,8 +1210,7 @@ export function App() {
       act(`nudge-${level}`, `Check-ins: ${level}`, () => session.dispatch({ type: 'assistLevel', level }), 'nudges distraction')
     }
     for (const t of tabs) {
-      if (t.id === activeId) continue
-      cmds.push({ id: `tab-${t.id}`, title: `Switch to: ${t.title || t.url || 'New tab'}`, hint: t.url, group: 'Tabs', run: () => setActiveId(t.id) })
+      cmds.push({ id: `tab-${t.id}`, title: `${t.id === activeId ? 'Current tab' : 'Switch to'}: ${t.title || t.url || 'New tab'}`, hint: t.url, group: 'Tabs', run: () => activateTab(t.id) })
     }
     for (const p of session.state.parked.filter((x) => x.kind === 'tab')) {
       cmds.push({ id: `parked-${p.id}`, title: `Reopen: ${p.title}`, hint: p.url, group: 'Parked', run: () => restoreParked(p) })
@@ -1171,35 +1300,45 @@ export function App() {
     void reading.openReader()
   }
 
-  // Stable key for tab-grouping: only re-run when the set of URLs actually changes
   const tabUrlsKey = useMemo(() => tabs.map(t => t.url).sort().join('|'), [tabs])
 
-  useEffect(() => {
-    // Grouping costs a model call, so only do it once there are enough tabs to be worth tidying.
-    if (tabs.length < 4) return
-    const currentTabs = tabsRef.current
-    const items: TabContextItem[] = currentTabs.map(t => ({ id: t.id, title: t.title, url: t.url, isActive: t.id === activeIdRef.current }))
-    const timer = setTimeout(async () => {
-      try {
-        const groups = await window.cclearBrowser.ai.groupTabs(items)
-        if (groups && groups.length > 0) {
-          setTabs(prev => prev.map(t => {
-            const g = groups.find(x => x.id === t.id)
-            return g ? { ...t, group: g.group } : t
-          }))
-        }
-      } catch {
-        // ignore
+  async function autoGroupTabs() {
+    const candidates = tabsRef.current.filter((tab) => !tab.group && tab.url !== 'about:blank')
+    if (candidates.length < 2) { notify('Open at least two ungrouped pages to group them.'); return }
+    setGroupingBusy(true)
+    try {
+      const items: TabContextItem[] = candidates.map((tab) => ({ id: tab.id, title: tab.title, url: tab.url, isActive: tab.id === activeIdRef.current }))
+      const suggestions = await window.cclearBrowser.ai.groupTabs(items)
+      const validIds = new Set(candidates.map((tab) => tab.id))
+      const names = new Map<string, string[]>()
+      for (const suggestion of suggestions) {
+        const name = typeof suggestion.group === 'string' ? cleanGroupName(suggestion.group) : ''
+        if (!validIds.has(suggestion.id) || !name) continue
+        names.set(name, [...(names.get(name) || []), suggestion.id])
       }
-    }, 8000)
-    return () => clearTimeout(timer)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabUrlsKey, tabs.length])
+      const clusters = [...names].filter(([, ids]) => ids.length >= 2)
+      if (!clusters.length) { notify('No clear tab groups found. You can group tabs manually by right-clicking one.'); return }
+      setGroups((previous) => {
+        const copy = { ...previous }
+        for (const [name] of clusters) if (!copy[name]) copy[name] = { color: GROUP_COLORS[Object.keys(copy).length % GROUP_COLORS.length], collapsed: false }
+        return copy
+      })
+      setTabs((previous) => {
+        let next = previous
+        for (const [name, ids] of clusters) for (const id of ids) next = moveIntoGroup(next, id, name)
+        return next
+      })
+      notify('Grouped similar tabs. Right-click a group to rename or recolor it.')
+    } catch {
+      notify('Could not group tabs. Check that the local AI model is running.')
+    } finally {
+      setGroupingBusy(false)
+    }
+  }
 
   // Keyboard shortcuts from native menu
   useEffect(() => {
-    return window.cclearBrowser.onShortcut((action, ...args) => {
-      const currentTabs = tabsRef.current
+    const handleShortcut = (action: string, ...args: unknown[]) => {
       const currentActiveId = activeIdRef.current
       const w = webviewRefs.current[currentActiveId]
 
@@ -1211,18 +1350,7 @@ export function App() {
           break
         }
         case 'close-tab': {
-          if (currentTabs.length <= 1) break
-          const idx = currentTabs.findIndex((t) => t.id === currentActiveId)
-          if (idx < 0) break
-          delete webviewRefs.current[currentActiveId]
-          delete historyMapRef.current[currentActiveId]
-          invalidateSimplifyStateForTab(currentActiveId)
-          setTabContexts(p => { const n = { ...p }; delete n[currentActiveId]; return n })
-          setContextLoading(p => { const n = { ...p }; delete n[currentActiveId]; return n })
-          const filtered = currentTabs.filter((t) => t.id !== currentActiveId)
-          const nextActive = currentTabs[idx - 1]?.id ?? filtered[0]?.id ?? currentActiveId
-          setTabs(filtered)
-          setActiveId(nextActive)
+          shortcutExtraRef.current('close-tab', args)
           break
         }
         case 'focus-address': {
@@ -1258,9 +1386,6 @@ export function App() {
         case 'park-tab':
           parkTabRef.current(currentActiveId)
           break
-        default:
-          shortcutExtraRef.current(action, args)
-          break
         case 'toggle-sidebar':
           setSidebarOpen(prev => !prev)
           break
@@ -1271,30 +1396,37 @@ export function App() {
           try { w?.goForward() } catch {}
           break
         case 'next-tab': {
-          if (currentTabs.length > 1) {
-            const idx = currentTabs.findIndex(t => t.id === currentActiveId)
-            setActiveId(currentTabs[(idx + 1) % currentTabs.length].id)
-          }
+          shortcutExtraRef.current('next-tab', args)
           break
         }
         case 'prev-tab': {
-          if (currentTabs.length > 1) {
-            const idx = currentTabs.findIndex(t => t.id === currentActiveId)
-            setActiveId(currentTabs[(idx - 1 + currentTabs.length) % currentTabs.length].id)
-          }
+          shortcutExtraRef.current('prev-tab', args)
           break
         }
         case 'go-tab': {
-          const tabIndex = args[0] as number
-          if (tabIndex === -1 && currentTabs.length > 0) {
-            setActiveId(currentTabs[currentTabs.length - 1].id)
-          } else if (tabIndex >= 0 && tabIndex < currentTabs.length) {
-            setActiveId(currentTabs[tabIndex].id)
-          }
+          shortcutExtraRef.current('go-tab', args)
           break
         }
+        default:
+          shortcutExtraRef.current(action, args)
+          break
       }
-    })
+    }
+    const unsubscribe = window.cclearBrowser.onShortcut(handleShortcut)
+    // The shell also catches the three core tab actions when a native menu accelerator is unavailable.
+    // Keys typed inside a web page remain covered by Electron's application menu.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.isComposing) return
+      const primary = navigator.platform.includes('Mac') ? event.metaKey : event.ctrlKey
+      if (!primary) return
+      const key = event.key.toLowerCase()
+      const action = key === 't' ? (event.shiftKey ? 'reopen-tab' : 'new-tab') : key === 'w' && !event.shiftKey ? 'close-tab' : ''
+      if (!action) return
+      event.preventDefault()
+      handleShortcut(action)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { unsubscribe(); window.removeEventListener('keydown', onKeyDown) }
   }, [])
 
   const recentHistory = useMemo(() => {
@@ -1312,7 +1444,26 @@ export function App() {
   return (
     <div className="appShell">
       <div className="chrome">
-        <TabStrip tabs={tabs} activeId={activeId} setActiveId={setActiveId} onClose={(id) => closeTab(id)} onNewTab={newTab} verdicts={drift.verdicts} />
+        <TabStrip
+          tabs={tabs}
+          activeId={activeId}
+          groups={groups}
+          onActivate={activateTab}
+          onClose={closeTab}
+          onNewTab={newTab}
+          onCreateGroup={createGroup}
+          onMoveToGroup={moveToGroup}
+          onRemoveFromGroup={removeFromGroup}
+          onMoveBefore={(id, beforeId) => setTabs((previous) => moveBeforeTab(previous, id, beforeId))}
+          onToggleGroup={(name) => setGroups((previous) => ({ ...previous, [name]: { color: previous[name]?.color || 'blue', collapsed: !previous[name]?.collapsed } }))}
+          onRenameGroup={renameGroup}
+          onColorGroup={(name, color) => setGroups((previous) => ({ ...previous, [name]: { color, collapsed: previous[name]?.collapsed || false } }))}
+          onUngroup={ungroup}
+          onCloseGroup={closeGroup}
+          onAutoGroup={() => void autoGroupTabs()}
+          groupingBusy={groupingBusy}
+          verdicts={drift.verdicts}
+        />
         <TopBar
           navUrl={navUrl}
           setNavUrl={setNavUrl}
@@ -1329,7 +1480,7 @@ export function App() {
           onToggleReading={() => setReadingOpen((v) => !v)}
           blockedCount={blockedCount}
           onOpenSettings={() => setSettingsOpen((v) => !v)}
-          onOpenPalette={() => setPaletteOpen(true)}
+          onOpenPalette={() => { setPaletteMode('all'); setPaletteOpen(true) }}
         />
         {!isNewTab && <SessionBar
           session={session.state.current}
@@ -1511,7 +1662,7 @@ export function App() {
           }}
         />
       )}
-      {paletteOpen && <CommandPalette commands={buildCommands()} dynamic={paletteDynamic} onClose={() => setPaletteOpen(false)} />}
+      {paletteOpen && <CommandPalette mode={paletteMode} commands={buildCommands()} dynamic={paletteDynamic} onClose={() => setPaletteOpen(false)} />}
       <aside
         className="chatDrawer"
         id="cclear-chat-drawer"
