@@ -4,6 +4,8 @@ Written 2026-10-15. Deadline: **Mon Oct 26, 2026, 12:00 PM ET** per most House-o
 
 Submission facts to verify on the official site (reported by House-office pages, not read from the official rules): one app per student; source code + a 1–3 minute public YouTube/Vimeo demo video; your district must be a participating district. Action item for the owner, not for code: confirm your district participates.
 
+The [development and tools note](../README.md#development-and-tools) records Rahul's account of his work and Claude Code's role. Use that account when answering the submission's AI-use questions, adding any other AI-assisted work that occurred. The [2026 CAC rules](https://www.congressionalappchallenge.us/wp-content/uploads/2026/05/2026-CAC-Rules.pdf) require full disclosure of AI use in the submission materials.
+
 ## 1. Repository reassessment (evidence from the code)
 
 **Reliable and reusable as-is**
