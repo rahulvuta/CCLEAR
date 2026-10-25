@@ -131,7 +131,7 @@ export function TabStrip(p: Props) {
                     if (id) p.onMoveToGroup(id, run.group)
                     setDraggedId(null)
                   }}
-                ><span className="tabGroupDot" />{run.group}<span className="tabGroupCount">{run.tabs.length}</span><span className="tabGroupChevron">⌄</span></button>
+                ><span className="tabGroupDot" />{run.group}</button>
                 <button type="button" className="tabGroupMore" aria-label={'Edit ' + run.group + ' group'} onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNameDraft(run.group); setMenu({ kind: 'group', group: run.group, x: r.left, y: r.bottom + 6 }) }}>···</button>
               </div>
             )}
@@ -166,7 +166,7 @@ export function TabStrip(p: Props) {
                     <span className="tabTitleText">{tab.title || (tab.url === 'about:blank' ? 'New tab' : tab.url) || 'New tab'}</span>
                   </button>
                   <button type="button" className="tabClose" tabIndex={collapsed ? -1 : 0} aria-label={'Close ' + (tab.title || 'tab')} title="Close tab" onClick={(event) => { event.stopPropagation(); p.onClose(tab.id) }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                   </button>
                 </div>
               ))}

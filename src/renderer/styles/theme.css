@@ -335,9 +335,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tabGroupLabel { display: flex; align-items: center; flex: 1; gap: 5px; min-width: 0; max-width: none; min-height: 23px; padding: 2px 4px; color: inherit; background: transparent; border: 0; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; white-space: nowrap; }
 .tabGroupLabel:focus-visible { outline-offset: 0; }
 .tabGroupDot, .tabMenuColor { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--group-color); }
-.tabGroupCount { color: var(--muted); font-size: 9px; font-weight: 600; }
-.tabGroupChevron { display: inline-block; font-size: 13px; line-height: 1; transition: transform .22s ease; }
-.tabGroupLabel[aria-expanded='false'] .tabGroupChevron { transform: rotate(-90deg); }
 .tabGroupMore { flex: none; width: 20px; height: 20px; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 5px; font-size: 14px; line-height: 1; opacity: .55; }
 .tabGroupMore:hover, .tabGroupMore:focus-visible { background: color-mix(in srgb, var(--group-color) 16%, transparent); opacity: 1; }
 .tabGroup[data-collapsed='true'] { display: none; }
