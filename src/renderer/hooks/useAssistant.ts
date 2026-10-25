@@ -6,7 +6,7 @@ import type { UITab } from '../components/TabStrip'
 import { detectPageActionIntent, buildPageMarkQuery, pageActionSay, type PageActionIntent, type PagePassageSnapshot } from '../../ai/pageActions'
 import type { ToolCall } from '../../ai/tools'
 import { getPageMarkScript, getPagePassagesScript } from '../../focus/pageMarks'
-import { requestedMarkColor } from '../../shared/markColors'
+import { markColor, requestedMarkColor } from '../../shared/markColors'
 import { needsScreenVision } from '../../ai/screenVision'
 import { looksLikePageQuestion } from '../../ai/askPage'
 import { looksLikeTabsQuestion } from '../../ai/askTabs'
@@ -75,7 +75,7 @@ export function useAssistant(env: AssistantEnv) {
     const selection = await window.cclearBrowser.ai.selectPagePassages(intent.query, snapshot, intent.kind)
     const ids = new Set(selection.ids)
     const raw = await wv.executeJavaScript(
-      getPageMarkScript({ mode: intent.kind, color: intent.color, url: snapshot.url, passages: snapshot.passages.filter((p) => ids.has(p.id)) }),
+      getPageMarkScript({ mode: intent.kind, color: intent.kind === 'highlight' ? intent.color || markColor(localStorage.getItem('cclear.highlightColor')) : undefined, url: snapshot.url, passages: snapshot.passages.filter((p) => ids.has(p.id)) }),
       true
     )
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
